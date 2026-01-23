@@ -7,6 +7,7 @@
 # Pods/
 .DS_Store
 xcshareddata
-NoFullScreen.xcodeproj/xcuserdata
-NoFullScreen.xcodeproj/project.xcworkspace/xcuserdata
-
+*.xcodeproj/xcuserdata
+*.xcodeproj/project.xcworkspace/xcuserdata
+*.xcodeproj/*.mode1v3
+build

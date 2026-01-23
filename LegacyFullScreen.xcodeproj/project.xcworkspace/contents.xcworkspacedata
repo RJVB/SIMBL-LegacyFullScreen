@@ -2,6 +2,6 @@
 <Workspace
    version = "1.0">
    <FileRef
-      location = "self:NoFullScreen.xcodeproj">
+      location = "self:LegacyFullScreen.xcodeproj">
    </FileRef>
 </Workspace>
