@@ -24,7 +24,7 @@ static SEL destinationSelectorForSelector(SEL cmd, Class dst) {
 }
 
 static Class classFromInfo(const char *info) {
-    NSUInteger bracket_index = -1;
+    NSUInteger bracket_index = (NSUInteger)-1;
     for (NSUInteger i = 0; i < strlen(info); i++) {
         if (info[i] == '[') {
             bracket_index = i;
@@ -33,12 +33,13 @@ static Class classFromInfo(const char *info) {
     }
     bracket_index++;
     
-    if (bracket_index == -1) {
+    if (bracket_index == (NSUInteger)-1) {
         [NSException raise:@"Failed to parse info" format:@"Couldn't find swizzle class for info: %s", info];
         return NULL;
     }
-    
-    char after_bracket[255];
+
+    NSUInteger brLen = strlen(info) - bracket_index;
+    char after_bracket[brLen];
     memcpy(after_bracket, &info[bracket_index], strlen(info) - bracket_index - 1);
     
     for (NSUInteger i = 0; i < strlen(info); i++) {
@@ -208,7 +209,7 @@ static BOOL enumerateMethods(Class destination, Class source) {
     BOOL success = YES;
     BOOL ignoreTypes = classIgnoresTypes(source);
     
-    for (int i = 0; i < methodCount; i++) {
+    for (unsigned int i = 0; i < methodCount; i++) {
         Method method = methodList[i];
         SEL selector  = method_getName(method);
         NSString *methodName = NSStringFromSelector(selector);
@@ -263,7 +264,7 @@ static BOOL enumerateMethods(Class destination, Class source) {
     
     unsigned int propertyCount;
     objc_property_t *propertyList = class_copyPropertyList(source, &propertyCount);
-    for (int i = 0; i < propertyCount; i++) {
+    for (unsigned int i = 0; i < propertyCount; i++) {
         objc_property_t property = propertyList[i];
         const char *name = property_getName(property);
         unsigned int attributeCount;

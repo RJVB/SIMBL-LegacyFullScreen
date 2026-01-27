@@ -27,7 +27,7 @@
     @public NSApplicationPresentationOptions m_normalPresOpts;
     @public NSRect m_normalRect;
     @public NSUInteger m_normalMask;
-    @public Boolean m_fullScreenActivated, m_toolBarVisible;
+    @public BOOL m_fullScreenActivated, m_toolBarVisible;
     @public NSToolbar *m_toolBar;
     @public NSString *m_Title;
     @public NSURL *m_reprURL;
@@ -36,6 +36,7 @@
 }
 - (void) dealloc;
 - (void) finalize;
+- (void) deinit;
 @end
 
 @implementation altNSWindow_stateVars
@@ -49,6 +50,11 @@
 {
     NSLog(@"%s", __PRETTY_FUNCTION__);
     [super finalize];
+}
+
+- (void)deinit
+{
+    NSLog(@"%s", __PRETTY_FUNCTION__);
 }
 @end
 
@@ -74,12 +80,12 @@ static NSString *getApplicationName()
 {
     altNSWindow_stateVars *ego;
     NSUInteger smask = [self styleMask];
-    Boolean wasActive = ([NSApp keyWindow] == self);
+    BOOL wasActive = ([NSApp keyWindow] == self);
 #if MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_9
-    Boolean menuBarsOnAllScreens = [NSScreen screensHaveSeparateSpaces];
+    BOOL menuBarsOnAllScreens = [NSScreen screensHaveSeparateSpaces];
 #else
     // let's be exhaustive and assume we can be built on 10.8 or earlier
-    Boolean menuBarsOnAllScreens = NO;
+    BOOL menuBarsOnAllScreens = NO;
 #endif
 
 //     NSString *winKey = [NSString stringWithFormat:@"%p", self];
@@ -203,12 +209,17 @@ static NSString *getApplicationName()
     NSLog(@"%s", __PRETTY_FUNCTION__);
     _super(void);
 }
+
+- (void)deinit
+{
+    NSLog(@"%s", __PRETTY_FUNCTION__);
+}
 @end
 
 @implementation LegacyFullScreen
 +(void) load
 {
-    NSArray *blackList;
+    NSArray *blackList = nil;
     NSBundle *thisPluginBundle = [NSBundle bundleForClass:[self class]];
     if (thisPluginBundle) {
         NSDictionary *infoPList = [thisPluginBundle infoDictionary];
@@ -253,7 +264,7 @@ static NSString *getApplicationName()
             }
         }
 
-        NSLog(@"Native FullScreen replaced with legacy emulation for application ID \"%@\"", appID);
+        NSLog(@"Legacy fullscreen emulation for application ID \"%@\" (%@)", appID, [thisPluginBundle bundlePath]);
     } else {
         NSLog(@"Legacy FullScreen emulation NOT used for blacklisted application \"%@\" (%@)", getApplicationName(), appID);
     }
