@@ -26,6 +26,8 @@ HowTo:
 
 For some applications it may be necessary to move or copy the bundle into /Library/Application Support/SIMBL/Plugins , for others it might be required to log out and back in.
 
+Note that there is a CMake file and a `qtcreator` folder; those are for using alternative IDEs, not to build the plugin!
+
 Blacklisting applications:
 ==========================
 This plugin supports blacklisting applications that do not work well with the changes caused by the plugin; Preview.app is an example which is already blacklisted.
