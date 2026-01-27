@@ -32,7 +32,7 @@
 			<key>BundleIdentifier</key>
 			<string>*</string>
 			<key>MaxBundleVersion</key>
-			<string>999999</string>
+			<string>99999999</string>
 			<key>MinBundleVersion</key>
 			<string>0</string>
 		</dict>
