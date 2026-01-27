@@ -25,6 +25,7 @@
 	<key>SIMBLApplicationIdentifierBlacklist</key>
 	<array>
 		<string>com.apple.Preview</string>
+		<string>com.apple.finder</string>
 	</array>
 	<key>SIMBLTargetApplications</key>
 	<array>

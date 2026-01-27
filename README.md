@@ -30,7 +30,7 @@ Note that there is a CMake file and a `qtcreator` folder; those are for using al
 
 Blacklisting applications:
 ==========================
-This plugin supports blacklisting applications that do not work well with the changes caused by the plugin; Preview.app is an example which is already blacklisted.
+This plugin supports blacklisting applications that do not work well with the changes caused by the plugin; Preview.app is an example which is already blacklisted, so is the Finder.
 To add applications, open LegacyFullScreen.bundle/Contents/Info.plist in your editor of choice and add their bundle identifier (e.g. `com.apple.Preview` for the Preview app) to the `SIMBLApplicationIdentifierBlacklist` key.
 Or add it to the Info.plist file in the source tree, and rebuild.
 
