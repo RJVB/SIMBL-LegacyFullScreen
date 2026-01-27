@@ -2,6 +2,7 @@ DEFINES += LEGACYFULLSCREEN_LIBRARY
 
 TEMPLATE = lib
 CONFIG += plugin plugin_bundle
+CONFIG -= widgets
 
 # LegacyFullScreen files
 
