@@ -141,7 +141,7 @@ static NSString *getApplicationName()
 //            NSLog(@"Restored iconButton:%@ with icon: %@->%@", iconButton, ego->m_windowIcon, [iconButton image]);
         }
         ego->m_fullScreenActivated = NO;
-        NSLog(@"Return from emulated legacy fullscreen");
+        NSLog(@"Exit from emulated legacy fullscreen");
     } else {
         NSToolbar *toolBar = [self toolbar];
         NSButton *iconButton = [self standardWindowButton:NSWindowDocumentIconButton];
