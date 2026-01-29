@@ -34,4 +34,4 @@ This plugin supports blacklisting applications that do not work well with the ch
 To add applications, open LegacyFullScreen.bundle/Contents/Info.plist in your editor of choice and add their bundle identifier (e.g. `com.apple.Preview` for the Preview app) to the `SIMBLApplicationIdentifierBlacklist` key.
 Or add it to the Info.plist file in the source tree, and rebuild.
 
-Please file an issue for if you encounter such applications, so I can add them too.
+Please file an issue for if you encounter such applications, so I can check and add them too.

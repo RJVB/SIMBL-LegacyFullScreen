@@ -87,6 +87,7 @@ static NSString *getApplicationName()
     // let's be exhaustive and assume we can be built on 10.8 or earlier
     BOOL menuBarsOnAllScreens = NO;
 #endif
+    static BOOL sendNotification = YES;
 
 //     NSString *winKey = [NSString stringWithFormat:@"%p", self];
 //     if (!(ego = [aNSW_Instances valueForKey:winKey]))
@@ -102,6 +103,13 @@ static NSString *getApplicationName()
             ego->m_toolBar = [self toolbar];
             ego->m_toolBarVisible = (ego->m_toolBar && [ego->m_toolBar isVisible]);
             ego->m_self = self;
+
+            //  check if we're in an application known not to like fullscreen enter/exit notifications
+            NSArray *noNotificationFor = [NSArray arrayWithObjects:@"com.apple.dt.Xcode",nil];
+            NSString *appID = [[[NSBundle mainBundle] infoDictionary] objectForKey:@"CFBundleIdentifier"];
+            if ([noNotificationFor containsObject:appID]) {
+                sendNotification = NO;
+            }
 //             [aNSW_Instances setValue:ego forKey:winKey];
             objc_setAssociatedObject(self, (__bridge const void *)(self), ego, OBJC_ASSOCIATION_RETAIN);
         } else {
@@ -111,6 +119,7 @@ static NSString *getApplicationName()
         }
     }
 
+    NSNotification *fullScreenNotification;
     if (ego->m_fullScreenActivated) {
         [self setStyleMask:ego->m_normalMask];
         [self setFrame:ego->m_normalRect display:YES animate:NO];
@@ -141,6 +150,8 @@ static NSString *getApplicationName()
 //            NSLog(@"Restored iconButton:%@ with icon: %@->%@", iconButton, ego->m_windowIcon, [iconButton image]);
         }
         ego->m_fullScreenActivated = NO;
+        fullScreenNotification = [NSNotification notificationWithName:NSWindowDidExitFullScreenNotification
+                                  object:self];
         NSLog(@"Exit from emulated legacy fullscreen");
     } else {
         NSToolbar *toolBar = [self toolbar];
@@ -183,7 +194,12 @@ static NSString *getApplicationName()
         // go fullscreen
         [self setFrame:[[self screen] visibleFrame] display:YES animate:NO];
         ego->m_fullScreenActivated = YES;
+        fullScreenNotification = [NSNotification notificationWithName:NSWindowDidEnterFullScreenNotification
+                                  object:self];
         NSLog(@"Activated emulated legacy fullscreen");
+    }
+    if (sendNotification) {
+        [[NSNotificationCenter defaultCenter] postNotification:fullScreenNotification];
     }
     if (wasActive) {
         [self makeKeyWindow];
