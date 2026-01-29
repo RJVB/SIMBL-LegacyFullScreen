@@ -228,7 +228,7 @@ static NSString *getApplicationName()
         blackList = [infoPList objectForKey:@"SIMBLApplicationIdentifierBlacklist"];
     }
     if (!blackList || ![[blackList className] isEqualToString:@"__NSArrayM"]) {
-        blackList = [NSArray arrayWithObjects:@"com.apple.Preview",nil];
+        blackList = [NSArray arrayWithObjects:@"com.apple.Preview",@"com.apple.finder",nil];
         NSLog(@"Warning: using hardcoded default appID blacklist (%@)!", blackList);
     }
     NSString *appID = [[[NSBundle mainBundle] infoDictionary] objectForKey:@"CFBundleIdentifier"];
