@@ -5,8 +5,6 @@
 #ifdef OVERRIDE_SETCOLLECTIONBEHAVIOR
 - (void)setCollectionBehavior:(NSWindowCollectionBehavior)behaviour;
 #endif
-- (void) finalize;
-- (void) deinit;
 @end
 
 

@@ -34,28 +34,9 @@
     @public NSImage *m_windowIcon;
     id m_self;
 }
-- (void) dealloc;
-- (void) finalize;
-- (void) deinit;
 @end
 
 @implementation altNSWindow_stateVars
-- (void)dealloc
-{
-    NSLog(@"%s", __PRETTY_FUNCTION__);
-    [super S_DEALLOC];
-}
-
-- (void)finalize
-{
-    NSLog(@"%s", __PRETTY_FUNCTION__);
-    [super finalize];
-}
-
-- (void)deinit
-{
-    NSLog(@"%s", __PRETTY_FUNCTION__);
-}
 @end
 
 static NSString *getApplicationName()
@@ -75,7 +56,27 @@ static NSString *getApplicationName()
     return appName;
 }
 
+// From Firefox's nsChildView.h :
+@interface NSView (Undocumented)
+
+// Undocumented method of one or more of NSFrameView's subclasses.  Called
+// when one or more of the titlebar buttons needs to be repositioned, to
+// disappear, or to reappear (say if the window's style changes).  If
+// 'redisplay' is true, the entire titlebar (the window's top 22 pixels) is
+// marked as needing redisplay.  This method has been present in the same
+// format since at least OS X 10.5.
+- (void)_tileTitlebarAndRedisplay:(BOOL)redisplay;
+@end
+
 @implementation altNSWindow
+- (void)sendFSNotification:(NSString*)notif ifTrue:(BOOL)enabled
+{
+    if (enabled) {
+        [[NSNotificationCenter defaultCenter] postNotification:[NSNotification notificationWithName:notif
+                                                        object:self]];
+    }
+}
+
 - (void)toggleFullScreen:(id)sender
 {
     altNSWindow_stateVars *ego;
@@ -88,6 +89,7 @@ static NSString *getApplicationName()
     BOOL menuBarsOnAllScreens = NO;
 #endif
     static BOOL sendNotification = YES;
+    static BOOL isMozilla = NO;
 
 //     NSString *winKey = [NSString stringWithFormat:@"%p", self];
 //     if (!(ego = [aNSW_Instances valueForKey:winKey]))
@@ -96,19 +98,25 @@ static NSString *getApplicationName()
         // ego = calloc(1, sizeof(altNSWindow_stateVars));
         ego = [[altNSWindow_stateVars alloc] init];
         if (ego) {
+            NSString *appID = [[[NSBundle mainBundle] infoDictionary] objectForKey:@"CFBundleIdentifier"];
+            //  check if we're in an application known not to like fullscreen enter/exit notifications
+//            NSArray *noNotificationFor = [NSArray arrayWithObjects:@"com.apple.dt.Xcode",nil];
+//            if ([noNotificationFor containsObject:appID]) {
+//                sendNotification = NO;
+//            }
+
             if (smask & NSFullScreenWindowMask) {
                 // end fullscreen if the window happens to be in that state (never tested yet!)
+                [self sendFSNotification:NSWindowWillExitFullScreenNotification ifTrue:sendNotification];
                 [self setStyleMask:(smask & ~NSFullScreenWindowMask)];
+                [self sendFSNotification:NSWindowDidExitFullScreenNotification ifTrue:sendNotification];
             }
             ego->m_toolBar = [self toolbar];
             ego->m_toolBarVisible = (ego->m_toolBar && [ego->m_toolBar isVisible]);
             ego->m_self = self;
 
-            //  check if we're in an application known not to like fullscreen enter/exit notifications
-            NSArray *noNotificationFor = [NSArray arrayWithObjects:@"com.apple.dt.Xcode",nil];
-            NSString *appID = [[[NSBundle mainBundle] infoDictionary] objectForKey:@"CFBundleIdentifier"];
-            if ([noNotificationFor containsObject:appID]) {
-                sendNotification = NO;
+            if ([appID isEqualToString:@"org.mozilla.firefox"]) {
+                isMozilla = YES;
             }
 //             [aNSW_Instances setValue:ego forKey:winKey];
             objc_setAssociatedObject(self, (__bridge const void *)(self), ego, OBJC_ASSOCIATION_RETAIN);
@@ -119,8 +127,8 @@ static NSString *getApplicationName()
         }
     }
 
-    NSNotification *fullScreenNotification;
     if (ego->m_fullScreenActivated) {
+        [self sendFSNotification:NSWindowWillExitFullScreenNotification ifTrue:sendNotification];    
         [self setStyleMask:ego->m_normalMask];
         [self setFrame:ego->m_normalRect display:YES animate:NO];
         [NSApp setPresentationOptions:ego->m_normalPresOpts];
@@ -149,15 +157,27 @@ static NSString *getApplicationName()
             [ego->m_windowIcon S_RELEASE];
 //            NSLog(@"Restored iconButton:%@ with icon: %@->%@", iconButton, ego->m_windowIcon, [iconButton image]);
         }
+        if (isMozilla) {
+            // None of the below have the intended effect :-/
+//            // ensure that the window buttons are visible on FS exit!
+//            [[self standardWindowButton:NSWindowCloseButton] setHidden:NO];
+//            [[self standardWindowButton:NSWindowMiniaturizeButton] setHidden:NO];
+//            [[self standardWindowButton:NSWindowZoomButton] setHidden:NO];
+//            NSView *frameView = [[self contentView] superview];
+//            //NSLog(@"win of class %@, frameView=%@", NSStringFromClass([self class]), frameView);
+//            if ([frameView respondsToSelector:@selector(_tileTitlebarAndRedisplay:)]) {
+//                [frameView _tileTitlebarAndRedisplay:NO];
+//            }
+        }
         ego->m_fullScreenActivated = NO;
-        fullScreenNotification = [NSNotification notificationWithName:NSWindowDidExitFullScreenNotification
-                                  object:self];
+        [self sendFSNotification:NSWindowDidExitFullScreenNotification ifTrue:sendNotification];
         NSLog(@"Exit from emulated legacy fullscreen");
     } else {
         NSToolbar *toolBar = [self toolbar];
         NSButton *iconButton = [self standardWindowButton:NSWindowDocumentIconButton];
         NSURL *reprURL = [self representedURL];
 
+        [self sendFSNotification:NSWindowWillEnterFullScreenNotification ifTrue:sendNotification];
         ego->m_normalMask = smask;
         ego->m_normalRect = [self frame];
         ego->m_windowIcon = [[iconButton image] S_RETAIN];
@@ -194,12 +214,8 @@ static NSString *getApplicationName()
         // go fullscreen
         [self setFrame:[[self screen] visibleFrame] display:YES animate:NO];
         ego->m_fullScreenActivated = YES;
-        fullScreenNotification = [NSNotification notificationWithName:NSWindowDidEnterFullScreenNotification
-                                  object:self];
+        [self sendFSNotification:NSWindowDidEnterFullScreenNotification ifTrue:sendNotification];
         NSLog(@"Activated emulated legacy fullscreen");
-    }
-    if (sendNotification) {
-        [[NSNotificationCenter defaultCenter] postNotification:fullScreenNotification];
     }
     if (wasActive) {
         [self makeKeyWindow];
@@ -220,16 +236,6 @@ static NSString *getApplicationName()
 }
 #endif
 
-- (void)finalize
-{
-    NSLog(@"%s", __PRETTY_FUNCTION__);
-    _super(void);
-}
-
-- (void)deinit
-{
-    NSLog(@"%s", __PRETTY_FUNCTION__);
-}
 @end
 
 @implementation LegacyFullScreen
