@@ -241,6 +241,19 @@ static NSString *getApplicationName()
 @implementation LegacyFullScreen
 +(void) load
 {
+    // the ID of the application we're being injected into:
+    NSString *appID = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleIdentifier"];
+
+    // ignore LSBackgroundOnly=1 and (a priori) also LSUIElement=1 applications as they don't have their
+    // own menu and we thus cannot ensure that they'll be able to exit FS mode (even if they can get into it).
+    if ([[[NSBundle mainBundle] objectForInfoDictionaryKey:@"LSUIElement"] boolValue]) {
+        NSLog(@"Legacy FullScreen emulation NOT used for \"agent\" application \"%@\" (%@)", getApplicationName(), appID);
+        return;
+    } else if ([[[NSBundle mainBundle] objectForInfoDictionaryKey:@"LSBackgroundOnly"] boolValue]) {
+        NSLog(@"Legacy FullScreen emulation NOT used for background-only application \"%@\" (%@)", getApplicationName(), appID);
+        return;
+    }
+
     NSArray *blackList = nil;
     NSBundle *thisPluginBundle = [NSBundle bundleForClass:[self class]];
     if (thisPluginBundle) {
@@ -253,40 +266,42 @@ static NSString *getApplicationName()
         blackList = [NSArray arrayWithObjects:@"com.apple.Preview",@"com.apple.finder",nil];
         NSLog(@"Warning: using hardcoded default appID blacklist (%@)!", blackList);
     }
-    NSString *appID = [[[NSBundle mainBundle] infoDictionary] objectForKey:@"CFBundleIdentifier"];
     if (![blackList containsObject:appID]) {
-        ZKSwizzle(altNSWindow, NSWindow);
-
         // see if we need to provide a "Enter Full Screen" menu item so the user can exit FS mode again:
         NSMenu *targetMenu = [[[NSApp mainMenu] itemWithTitle:@"View"] submenu];
+        NSMenuItem *here = nil;
         if (!targetMenu) {
             targetMenu = [NSApp windowsMenu];
-            if (![targetMenu itemWithTitle:@"Enter Full Screen"]) {
+            here = [targetMenu itemWithTitle:@"Enter Full Screen"];
+            if (!here) {
                 // add "Enter FullScreen Ctrl-Cmd-F" after the Zoom (or the Minimize) item
-                NSMenuItem *here = [targetMenu itemWithTitle:@"Zoom"];
+                here = [targetMenu itemWithTitle:@"Zoom"];
                 if (!here) {
                     here = [targetMenu itemWithTitle:@"Minimize"];
                 }
                 if (here) {
-                    [[targetMenu insertItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"
-                                             atIndex:[targetMenu indexOfItem:here]+1]
-                     setKeyEquivalentModifierMask:NSCommandKeyMask|NSControlKeyMask];
+                    here = [targetMenu insertItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"
+                           atIndex:[targetMenu indexOfItem:here]+1];
                 } else {
-                    [[targetMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"]
-                     setKeyEquivalentModifierMask:NSCommandKeyMask|NSControlKeyMask];
+                    here = [targetMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"];
                 }
             }
 
         } else {
             // add "Enter FullScreen Ctrl-Cmd-F" if it doesn't already exist
-            NSMenuItem *eFS = [targetMenu itemWithTitle:@"Enter Full Screen"];
-            if (!eFS) {
-                [[targetMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"]
-                 setKeyEquivalentModifierMask:NSCommandKeyMask|NSControlKeyMask];
+            here = [targetMenu itemWithTitle:@"Enter Full Screen"];
+            if (!here) {
+                here = [targetMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"];
             }
         }
-
-        NSLog(@"Legacy fullscreen emulation for application ID \"%@\" (%@)", appID, [thisPluginBundle bundlePath]);
+        if (here) {
+            [here setKeyEquivalentModifierMask:NSCommandKeyMask|NSControlKeyMask];
+            // Now we know we can swizzle!
+            ZKSwizzle(altNSWindow, NSWindow);
+            NSLog(@"Legacy fullscreen emulation for application ID \"%@\" (%@)", appID, [thisPluginBundle bundlePath]);
+        } else {
+            NSLog(@"Couldn't add the missing \"Enter Full Screen\" menu; NO legacy fullscreen emulation for application ID \"%@\" (%@)", appID, [thisPluginBundle bundlePath]);
+        }
     } else {
         NSLog(@"Legacy FullScreen emulation NOT used for blacklisted application \"%@\" (%@)", getApplicationName(), appID);
     }
