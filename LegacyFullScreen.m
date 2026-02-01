@@ -272,18 +272,34 @@ static NSString *getApplicationName()
         NSMenuItem *here = nil;
         if (!targetMenu) {
             targetMenu = [NSApp windowsMenu];
-            here = [targetMenu itemWithTitle:@"Enter Full Screen"];
-            if (!here) {
-                // add "Enter FullScreen Ctrl-Cmd-F" after the Zoom (or the Minimize) item
-                here = [targetMenu itemWithTitle:@"Zoom"];
+            if (targetMenu) {
+                here = [targetMenu itemWithTitle:@"Enter Full Screen"];
                 if (!here) {
-                    here = [targetMenu itemWithTitle:@"Minimize"];
+                    // add "Enter FullScreen Ctrl-Cmd-F" after the Zoom (or the Minimize) item
+                    here = [targetMenu itemWithTitle:@"Zoom"];
+                    if (!here) {
+                        here = [targetMenu itemWithTitle:@"Minimize"];
+                    }
+                    if (here) {
+                        here = [targetMenu insertItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"
+                               atIndex:[targetMenu indexOfItem:here]+1];
+                    } else {
+                        here = [targetMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"];
+                    }
                 }
-                if (here) {
-                    here = [targetMenu insertItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"
-                           atIndex:[targetMenu indexOfItem:here]+1];
-                } else {
-                    here = [targetMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"];
+            } else {
+                NSApplication *theApp = [NSApplication sharedApplication];
+                targetMenu = [theApp.delegate applicationDockMenu:theApp];
+                // this may work but the item might not survive...
+                NSLog(@"Warning: adding \"Enter Full Screen\" menu to the dockMenu!");
+                if (targetMenu) {
+                    here = [targetMenu itemWithTitle:@"Hide"];
+                    if (here) {
+                        here = [targetMenu insertItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"
+                               atIndex:[targetMenu indexOfItem:here]+1];
+                    } else {
+                        here = [targetMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"];
+                    }
                 }
             }
 
