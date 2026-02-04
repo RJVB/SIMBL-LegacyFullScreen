@@ -238,11 +238,61 @@ static NSString *getApplicationName()
 @end
 
 @interface altNSApplicationDelegate : NSObject <NSApplicationDelegate>
+{
+    NSStatusItem *systrayItem;
+}
+- (instancetype)init;
+- (void)dealloc;
+- (NSMenu *)systrayMenu;
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification;
 - (void)applicationWillTerminate:(NSNotification *)aNotification;
 @end
     
 @implementation altNSApplicationDelegate
+- (instancetype)init
+{
+    self = [super init];
+    systrayItem = nil;
+    return self;
+}
+
+- (NSMenu *)systrayMenu
+{
+    NSMenu *menu = nil;
+    if (!systrayItem) {
+        NSString *bundleIconName = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleIconFile"];
+        if (!bundleIconName || [bundleIconName isEqualToString:@""]) {
+            return nil;
+        }
+        NSImage *icon = [NSImage imageNamed:bundleIconName];
+        if (!icon) {
+            return nil;
+        }
+        const NSStatusBar *sBar = [NSStatusBar systemStatusBar];
+        systrayItem = [[sBar statusItemWithLength:NSSquareStatusItemLength] S_RETAIN];
+        CGFloat mHeight = [sBar thickness] - 4;
+        NSSize iSize = {mHeight, mHeight};
+        [icon setSize:iSize];
+        [systrayItem setImage:icon];
+        [systrayItem setToolTip:[NSString
+                                 stringWithFormat:@"Toggle legacy full-screen mode for application \"%@\"",
+                                 getApplicationName()]];
+    }
+    if (systrayItem && !(menu = [systrayItem menu])) {
+        [systrayItem setHighlightMode:YES];
+        menu = [[[NSMenu alloc] init] S_RETAIN];
+        [systrayItem setMenu:menu];
+    }
+    return menu;
+}
+
+- (void) dealloc
+{
+    [[systrayItem menu] S_RELEASE];
+    [systrayItem S_RELEASE];
+    [super S_DEALLOC];
+}
+
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification
 {
     NSLog(@"%s %@", __PRETTY_FUNCTION__, aNotification);
@@ -283,16 +333,16 @@ static NSString *getApplicationName()
     }
 @end
     
-static altNSApplicationDelegate *listener;
+static altNSApplicationDelegate *fsDelegate;
 @implementation LegacyFullScreen
 +(void) load
 {
-    listener = [[altNSApplicationDelegate alloc] init];
-    if (listener){
-        [[NSNotificationCenter defaultCenter] addObserver:listener
+    fsDelegate = [[altNSApplicationDelegate alloc] init];
+    if (fsDelegate){
+        [[NSNotificationCenter defaultCenter] addObserver:fsDelegate
                                                           selector:@selector(applicationDidFinishLaunching:)
           name:NSApplicationDidFinishLaunchingNotification object:NSApp];
-//        [[NSNotificationCenter defaultCenter] addObserver:listener
+//        [[NSNotificationCenter defaultCenter] addObserver:fsDelegate
 //                                                          selector:@selector(applicationWillTerminate:)
 //          name:NSApplicationWillTerminateNotification object:NSApp];
     }
@@ -305,7 +355,8 @@ static altNSApplicationDelegate *listener;
     if ([[[NSBundle mainBundle] objectForInfoDictionaryKey:@"LSUIElement"] boolValue]) {
         NSLog(@"Legacy FullScreen emulation NOT used for \"agent\" application \"%@\" (%@)", getApplicationName(), appID);
         return;
-    } else if ([[[NSBundle mainBundle] objectForInfoDictionaryKey:@"LSBackgroundOnly"] boolValue]) {
+    } else if ([[[NSBundle mainBundle] objectForInfoDictionaryKey:@"LSBackgroundOnly"] boolValue]
+               || [[[NSBundle mainBundle] objectForInfoDictionaryKey:@"NSBGOnly"] boolValue]) {
         NSLog(@"Legacy FullScreen emulation NOT used for background-only application \"%@\" (%@)", getApplicationName(), appID);
         return;
     }
@@ -345,11 +396,21 @@ static altNSApplicationDelegate *listener;
 
     if (![blackList containsObject:appID] && ![userBlackList containsObject:appID]) {
         // see if we need to provide a "Enter Full Screen" menu item so the user can exit FS mode again:
+        if (![NSApp mainMenu]) {
+            NSLog(@"Warning: %@ (%@) does not (currently) have a menu structure at all!", appID, getApplicationName());
+        }
         NSMenuItem *here = [[NSApp mainMenu] itemWithTitle:@"Enter Full Screen" recursiveSearch:YES];
         BOOL appOK = [whiteList containsObject:appID] || [userWhiteList containsObject:appID];
         if (!appOK && !here) {
             NSMenu *targetMenu = [[[NSApp mainMenu] itemWithTitle:@"View"] submenu];
-            if (!targetMenu) {
+            if (targetMenu) {
+                // add "Enter FullScreen Ctrl-Cmd-F" if it doesn't already exist
+                here = [targetMenu itemWithTitle:@"Enter Full Screen"];
+                if (!here) {
+                    here = [targetMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"];
+                    [here setKeyEquivalentModifierMask:NSCommandKeyMask|NSControlKeyMask];
+                }
+            } else {
                 targetMenu = [NSApp windowsMenu];
                 if (targetMenu) {
                     here = [targetMenu itemWithTitle:@"Enter Full Screen"];
@@ -360,41 +421,46 @@ static altNSApplicationDelegate *listener;
                             here = [targetMenu itemWithTitle:@"Minimize"];
                         }
                         if (here) {
-                            here = [targetMenu insertItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"
+                            here = [targetMenu insertItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@""
                                    atIndex:[targetMenu indexOfItem:here]+1];
                         } else {
-                            here = [targetMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"];
+                            here = [targetMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@""];
                         }
                     }
                 } else {
-                    NSApplication *theApp = [NSApplication sharedApplication];
-                    NSObject<NSApplicationDelegate> *delegate = theApp.delegate;
-                    targetMenu = [delegate respondsToSelector:@selector(applicationDockMenu)] ? [delegate applicationDockMenu:theApp] : nil;
-                    // this may work but the item might not survive...
+                    // If we're here that means we couldn't find a suitable menu to add our item to.
+                    // Best option that gives the least chance of interference from and with the host application
+                    // is to add a status bar (aka systray) menu. There can be more than one of those, and a priori
+                    // the host cannot know about ours.
+                    // NB: we may need to rethink this for applications that do not have a menu at all...
+                    targetMenu = [fsDelegate systrayMenu];
                     if (targetMenu) {
-                        NSLog(@"Warning: adding \"Enter Full Screen\" menu to the dockMenu! %@", targetMenu);
-                        here = [targetMenu itemWithTitle:@"Hide"];
-                        if (here) {
-                            here = [targetMenu insertItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"
-                                   atIndex:[targetMenu indexOfItem:here]+1];
-                        } else {
-                            here = [targetMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"];
+                        here = [targetMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@""];
+                    } else {
+                        // last attempt, a hail-mary: the Dock menu.
+                        NSApplication *theApp = [NSApplication sharedApplication];
+                        NSObject<NSApplicationDelegate> *delegate = theApp.delegate;
+                        targetMenu = [delegate respondsToSelector:@selector(applicationDockMenu)] ? [delegate applicationDockMenu:theApp] : nil;
+                        // this may work but the item might not survive...
+                        if (targetMenu) {
+                            NSLog(@"Warning: adding \"Enter Full Screen\" menu to the dockMenu! %@", targetMenu);
+                            here = [targetMenu itemWithTitle:@"Hide"];
+                            if (here) {
+                                here = [targetMenu insertItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@""
+                                       atIndex:[targetMenu indexOfItem:here]+1];
+                            } else {
+                                here = [targetMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@""];
+                            }
                         }
                     }
                 }
-                
-            } else {
-                // add "Enter FullScreen Ctrl-Cmd-F" if it doesn't already exist
-                here = [targetMenu itemWithTitle:@"Enter Full Screen"];
-                if (!here) {
-                    here = [targetMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"];
+                if (here) {
+                    [here setKeyEquivalent:@"f"];
+                    [here setKeyEquivalentModifierMask:NSCommandKeyMask|NSControlKeyMask];
                 }
             }
         }
         if (appOK || here) {
-            if (!appOK) {
-                [here setKeyEquivalentModifierMask:NSCommandKeyMask|NSControlKeyMask];
-            }
             // Now we know we can swizzle!
             ZKSwizzle(altNSWindow, NSWindow);
             NSLog(@"Legacy fullscreen emulation for application ID \"%@\" (%@)", appID, [thisPluginBundle bundlePath]);
