@@ -7,7 +7,6 @@
 #endif
 @end
 
-
 @interface LegacyFullScreen : NSObject
 {
 }

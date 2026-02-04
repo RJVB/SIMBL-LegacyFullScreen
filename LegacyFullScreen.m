@@ -235,12 +235,68 @@ static NSString *getApplicationName()
     _orig(void, behaviour);
 }
 #endif
-
 @end
 
+@interface altNSApplicationDelegate : NSObject <NSApplicationDelegate>
+- (void)applicationDidFinishLaunching:(NSNotification *)aNotification;
+- (void)applicationWillTerminate:(NSNotification *)aNotification;
+@end
+    
+@implementation altNSApplicationDelegate
+- (void)applicationDidFinishLaunching:(NSNotification *)aNotification
+{
+    NSLog(@"%s %@", __PRETTY_FUNCTION__, aNotification);
+}
+
+- (void)applicationWillTerminate:(NSNotification *)aNotification
+{
+    NSLog(@"%s %@", __PRETTY_FUNCTION__, aNotification);
+}
+@end
+
+@interface NSMenu (Extended)
+- (NSMenuItem *)itemWithTitle:(NSString *)aString  recursiveSearch:(BOOL)isRecursive;
+@end
+
+@implementation NSMenu (Extended)
+    - (NSMenuItem *)itemWithTitle:(NSString *)aString  recursiveSearch:(BOOL)isRecursive
+    {
+        NSMenuItem *ret;
+        if (isRecursive) {
+            ret = [self itemWithTitle:aString];
+            if (!ret) {
+                NSArray *items = [self itemArray];
+                for (NSMenuItem *item in items) {
+                    NSMenu *submenu = [item submenu];
+//                    if (submenu) {
+//                        NSLog(@"submenu %@:%@", item, submenu);
+//                    }
+                    if (submenu && (ret = [submenu itemWithTitle:aString recursiveSearch:true])) {
+                        return ret;
+                    }
+                }
+            }
+        } else {
+            ret = [self itemWithTitle:aString];
+        }
+        return ret;
+    }
+@end
+    
+static altNSApplicationDelegate *listener;
 @implementation LegacyFullScreen
 +(void) load
 {
+    listener = [[altNSApplicationDelegate alloc] init];
+    if (listener){
+        [[NSNotificationCenter defaultCenter] addObserver:listener
+                                                          selector:@selector(applicationDidFinishLaunching:)
+          name:NSApplicationDidFinishLaunchingNotification object:NSApp];
+//        [[NSNotificationCenter defaultCenter] addObserver:listener
+//                                                          selector:@selector(applicationWillTerminate:)
+//          name:NSApplicationWillTerminateNotification object:NSApp];
+    }
+
     // the ID of the application we're being injected into:
     NSString *appID = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleIdentifier"];
 
@@ -254,64 +310,91 @@ static NSString *getApplicationName()
         return;
     }
 
-    NSArray *blackList = nil;
     NSBundle *thisPluginBundle = [NSBundle bundleForClass:[self class]];
+    NSDictionary *defaults = thisPluginBundle? [[[NSUserDefaults alloc] init] persistentDomainForName:[thisPluginBundle bundleIdentifier]] : nil;
+
+    // Try to get the blackList of appIDs that we shouldn't serve
+    // First, see if the user set any defaults. These should be readable even in sandboxed host apps.
+    NSArray *blackList = nil,
+            *userBlackList = [defaults objectForKey:@"SIMBLApplicationIdentifierBlacklist"];
+//    NSLog(@"blacklist from user prefs: %@ (%@;%d)", blackList, [blackList className], [blackList isKindOfClass:[NSArray class]]);
+    if (![userBlackList isKindOfClass:[NSArray class]]) {
+        userBlackList = nil;
+    }
     if (thisPluginBundle) {
+        // next, try to get it from the plugin's Info.plist. This may fail in sandboxed host apps!
         NSDictionary *infoPList = [thisPluginBundle infoDictionary];
         // reuse the info key also used at the level of the SIMBL agent (for all plugins)
         // (evidently this doesn't interfere with that "global" key!)
         blackList = [infoPList objectForKey:@"SIMBLApplicationIdentifierBlacklist"];
+        //NSLog(@"blacklist from Info.plist: %@ (%@;%d)", blackList, [blackList className], [blackList isKindOfClass:[NSArray class]]);
     }
-    if (!blackList || ![[blackList className] isEqualToString:@"__NSArrayM"]) {
+    if (!blackList || ![blackList isKindOfClass:[NSArray class]]) {
+        // fall back on a hardcoded list
         blackList = [NSArray arrayWithObjects:@"com.apple.Preview",@"com.apple.finder",nil];
         NSLog(@"Warning: using hardcoded default appID blacklist (%@)!", blackList);
     }
-    if (![blackList containsObject:appID]) {
+
+    // Now do the same for a whiteList of applications which don't require adding a menu item,
+    // to exit from our FS mode, because they already provide their own, compatible mechanism.
+    NSArray *whiteList = [NSArray arrayWithObjects:@"com.apple.firefox",nil],
+            *userWhiteList = [defaults objectForKey:@"ApplicationIdentifierWhitelist"];
+    if (![userWhiteList isKindOfClass:[NSArray class]]) {
+        userWhiteList = nil;
+    }
+
+    if (![blackList containsObject:appID] && ![userBlackList containsObject:appID]) {
         // see if we need to provide a "Enter Full Screen" menu item so the user can exit FS mode again:
-        NSMenu *targetMenu = [[[NSApp mainMenu] itemWithTitle:@"View"] submenu];
-        NSMenuItem *here = nil;
-        if (!targetMenu) {
-            targetMenu = [NSApp windowsMenu];
-            if (targetMenu) {
+        NSMenuItem *here = [[NSApp mainMenu] itemWithTitle:@"Enter Full Screen" recursiveSearch:YES];
+        BOOL appOK = [whiteList containsObject:appID] || [userWhiteList containsObject:appID];
+        if (!appOK && !here) {
+            NSMenu *targetMenu = [[[NSApp mainMenu] itemWithTitle:@"View"] submenu];
+            if (!targetMenu) {
+                targetMenu = [NSApp windowsMenu];
+                if (targetMenu) {
+                    here = [targetMenu itemWithTitle:@"Enter Full Screen"];
+                    if (!here) {
+                        // add "Enter FullScreen Ctrl-Cmd-F" after the Zoom (or the Minimize) item
+                        here = [targetMenu itemWithTitle:@"Zoom"];
+                        if (!here) {
+                            here = [targetMenu itemWithTitle:@"Minimize"];
+                        }
+                        if (here) {
+                            here = [targetMenu insertItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"
+                                   atIndex:[targetMenu indexOfItem:here]+1];
+                        } else {
+                            here = [targetMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"];
+                        }
+                    }
+                } else {
+                    NSApplication *theApp = [NSApplication sharedApplication];
+                    NSObject<NSApplicationDelegate> *delegate = theApp.delegate;
+                    targetMenu = [delegate respondsToSelector:@selector(applicationDockMenu)] ? [delegate applicationDockMenu:theApp] : nil;
+                    // this may work but the item might not survive...
+                    if (targetMenu) {
+                        NSLog(@"Warning: adding \"Enter Full Screen\" menu to the dockMenu! %@", targetMenu);
+                        here = [targetMenu itemWithTitle:@"Hide"];
+                        if (here) {
+                            here = [targetMenu insertItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"
+                                   atIndex:[targetMenu indexOfItem:here]+1];
+                        } else {
+                            here = [targetMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"];
+                        }
+                    }
+                }
+                
+            } else {
+                // add "Enter FullScreen Ctrl-Cmd-F" if it doesn't already exist
                 here = [targetMenu itemWithTitle:@"Enter Full Screen"];
                 if (!here) {
-                    // add "Enter FullScreen Ctrl-Cmd-F" after the Zoom (or the Minimize) item
-                    here = [targetMenu itemWithTitle:@"Zoom"];
-                    if (!here) {
-                        here = [targetMenu itemWithTitle:@"Minimize"];
-                    }
-                    if (here) {
-                        here = [targetMenu insertItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"
-                               atIndex:[targetMenu indexOfItem:here]+1];
-                    } else {
-                        here = [targetMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"];
-                    }
+                    here = [targetMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"];
                 }
-            } else {
-                NSApplication *theApp = [NSApplication sharedApplication];
-                targetMenu = [theApp.delegate applicationDockMenu:theApp];
-                // this may work but the item might not survive...
-                NSLog(@"Warning: adding \"Enter Full Screen\" menu to the dockMenu!");
-                if (targetMenu) {
-                    here = [targetMenu itemWithTitle:@"Hide"];
-                    if (here) {
-                        here = [targetMenu insertItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"
-                               atIndex:[targetMenu indexOfItem:here]+1];
-                    } else {
-                        here = [targetMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"];
-                    }
-                }
-            }
-
-        } else {
-            // add "Enter FullScreen Ctrl-Cmd-F" if it doesn't already exist
-            here = [targetMenu itemWithTitle:@"Enter Full Screen"];
-            if (!here) {
-                here = [targetMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"];
             }
         }
-        if (here) {
-            [here setKeyEquivalentModifierMask:NSCommandKeyMask|NSControlKeyMask];
+        if (appOK || here) {
+            if (!appOK) {
+                [here setKeyEquivalentModifierMask:NSCommandKeyMask|NSControlKeyMask];
+            }
             // Now we know we can swizzle!
             ZKSwizzle(altNSWindow, NSWindow);
             NSLog(@"Legacy fullscreen emulation for application ID \"%@\" (%@)", appID, [thisPluginBundle bundlePath]);
