@@ -26,6 +26,9 @@
 	<array>
 		<string>com.apple.Preview</string>
 		<string>com.apple.finder</string>
+        <string>com.apple.speech.recognitionserver</string>
+        <string>com.apple.speech.feedbackservicesserver</string>
+        <string>com.apple.speech.speechsynthesisd</string>
 	</array>
 	<key>SIMBLTargetApplications</key>
 	<array>
