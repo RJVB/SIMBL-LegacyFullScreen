@@ -42,17 +42,17 @@
 static NSString *getApplicationName()
 {
     NSString *appName;
-    
+
     /* Determine the application name */
     appName = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleDisplayName"];
     if (!appName) {
         appName = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleName"];
     }
-    
+
     if (![appName length]) {
         appName = [[NSProcessInfo processInfo] processName];
     }
-    
+
     return appName;
 }
 
@@ -128,7 +128,7 @@ static NSString *getApplicationName()
     }
 
     if (ego->m_fullScreenActivated) {
-        [self sendFSNotification:NSWindowWillExitFullScreenNotification ifTrue:sendNotification];    
+        [self sendFSNotification:NSWindowWillExitFullScreenNotification ifTrue:sendNotification];
         [self setStyleMask:ego->m_normalMask];
         [self setFrame:ego->m_normalRect display:YES animate:NO];
         [NSApp setPresentationOptions:ego->m_normalPresOpts];
@@ -247,7 +247,7 @@ static NSString *getApplicationName()
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification;
 - (void)applicationWillTerminate:(NSNotification *)aNotification;
 @end
-    
+
 @implementation altNSApplicationDelegate
 - (instancetype)init
 {
@@ -332,7 +332,7 @@ static NSString *getApplicationName()
         return ret;
     }
 @end
-    
+
 static altNSApplicationDelegate *fsDelegate;
 @implementation LegacyFullScreen
 +(void) load
@@ -396,13 +396,14 @@ static altNSApplicationDelegate *fsDelegate;
 
     if (![blackList containsObject:appID] && ![userBlackList containsObject:appID]) {
         // see if we need to provide a "Enter Full Screen" menu item so the user can exit FS mode again:
-        if (![NSApp mainMenu]) {
+        NSMenu *mainMenu = [NSApp mainMenu];
+        if (!mainMenu) {
             NSLog(@"Warning: %@ (%@) does not (currently) have a menu structure at all!", appID, getApplicationName());
         }
-        NSMenuItem *here = [[NSApp mainMenu] itemWithTitle:@"Enter Full Screen" recursiveSearch:YES];
+        NSMenuItem *here = [mainMenu itemWithTitle:@"Enter Full Screen" recursiveSearch:YES];
         BOOL appOK = [whiteList containsObject:appID] || [userWhiteList containsObject:appID];
-        if (!appOK && !here) {
-            NSMenu *targetMenu = [[[NSApp mainMenu] itemWithTitle:@"View"] submenu];
+        if (!appOK && !here && mainMenu) {
+            NSMenu *targetMenu = [[mainMenu itemWithTitle:@"View"] submenu];
             if (targetMenu) {
                 // add "Enter FullScreen Ctrl-Cmd-F" if it doesn't already exist
                 here = [targetMenu itemWithTitle:@"Enter Full Screen"];
