@@ -239,27 +239,29 @@ static NSString *getApplicationName()
 
 @interface altNSApplicationDelegate : NSObject <NSApplicationDelegate>
 {
-    NSStatusItem *systrayItem;
+    NSStatusItem *m_systrayItem;
+    NSMenu *m_menu;
 }
 - (instancetype)init;
 - (void)dealloc;
 - (NSMenu *)systrayMenu;
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification;
 - (void)applicationWillTerminate:(NSNotification *)aNotification;
+- (void)menuItemChanged:(NSNotification *)aNotification;
 @end
 
 @implementation altNSApplicationDelegate
 - (instancetype)init
 {
     self = [super init];
-    systrayItem = nil;
+    m_systrayItem = nil;
+    m_menu = nil;
     return self;
 }
 
 - (NSMenu *)systrayMenu
 {
-    NSMenu *menu = nil;
-    if (!systrayItem) {
+    if (!m_systrayItem) {
         NSString *bundleIconName = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleIconFile"];
         if (!bundleIconName || [bundleIconName isEqualToString:@""]) {
             return nil;
@@ -269,27 +271,54 @@ static NSString *getApplicationName()
             return nil;
         }
         const NSStatusBar *sBar = [NSStatusBar systemStatusBar];
-        systrayItem = [[sBar statusItemWithLength:NSSquareStatusItemLength] S_RETAIN];
+        m_systrayItem = [[sBar statusItemWithLength:NSSquareStatusItemLength] S_RETAIN];
         CGFloat mHeight = [sBar thickness] - 4;
         NSSize iSize = {mHeight, mHeight};
         [icon setSize:iSize];
-        [systrayItem setImage:icon];
-        [systrayItem setToolTip:[NSString
+// A solution from Qt to make NSStatusItems hidable: give them a custom view based on NSImageView
+// This would have to track mouseclicks and invoke popUpStatusItemMenu; see qcocoasystemtrayicon.mm
+// from the Cocoa QPA or in my osx-integration repo.
+//        [m_systrayItem setView:[[NSImageView alloc] init]];
+//        [(NSImageView*)([m_systrayItem view]) setImage:icon];
+        [m_systrayItem setImage:icon];
+        [m_systrayItem setToolTip:[NSString
                                  stringWithFormat:@"Toggle legacy full-screen mode for application \"%@\"",
                                  getApplicationName()]];
     }
-    if (systrayItem && !(menu = [systrayItem menu])) {
-        [systrayItem setHighlightMode:YES];
-        menu = [[[NSMenu alloc] init] S_RETAIN];
-        [systrayItem setMenu:menu];
+    if (!m_menu) {
+        m_menu = [[[NSMenu alloc] init] S_RETAIN];
     }
-    return menu;
+    if (m_systrayItem && m_menu != [m_systrayItem menu]) {
+        [m_systrayItem setHighlightMode:YES];
+        [m_systrayItem setMenu:m_menu];
+    }
+    return m_menu;
+}
+
+- (void)menuItemChanged:(NSNotification *)aNotification
+{
+    NSMenuItem *item = [[m_systrayItem menu] itemAtIndex:
+                        [[[aNotification userInfo] objectForKey:@"NSMenuItemIndex"] intValue]];
+    if ([item isEnabled]) {
+        // this will restore the systray widget with its menu
+        [self systrayMenu];
+    } else {
+        // drastic measures to keep things easy (no need for a custom NSImageView-based view
+        // that can be un/hidden and knows how to display a menu...
+        // First, close the menu (what's in a name...):
+        [m_menu cancelTrackingWithoutAnimation];
+        // now remove and discard the status bar item, but preserve the menu.
+        [m_systrayItem setMenu:nil];
+        [[NSStatusBar systemStatusBar] removeStatusItem:m_systrayItem];
+        [m_systrayItem S_RELEASE];
+        m_systrayItem = nil;
+    }
 }
 
 - (void) dealloc
 {
-    [[systrayItem menu] S_RELEASE];
-    [systrayItem S_RELEASE];
+    [m_menu S_RELEASE];
+    [m_systrayItem S_RELEASE];
     [super S_DEALLOC];
 }
 
@@ -318,9 +347,6 @@ static NSString *getApplicationName()
                 NSArray *items = [self itemArray];
                 for (NSMenuItem *item in items) {
                     NSMenu *submenu = [item submenu];
-//                    if (submenu) {
-//                        NSLog(@"submenu %@:%@", item, submenu);
-//                    }
                     if (submenu && (ret = [submenu itemWithTitle:aString recursiveSearch:true])) {
                         return ret;
                     }
@@ -340,23 +366,25 @@ static altNSApplicationDelegate *fsDelegate;
     fsDelegate = [[altNSApplicationDelegate alloc] init];
     if (fsDelegate){
         [[NSNotificationCenter defaultCenter] addObserver:fsDelegate
-                                                          selector:@selector(applicationDidFinishLaunching:)
-          name:NSApplicationDidFinishLaunchingNotification object:NSApp];
+                                                 selector:@selector(applicationDidFinishLaunching:)
+                                                     name:NSApplicationDidFinishLaunchingNotification object:NSApp];
 //        [[NSNotificationCenter defaultCenter] addObserver:fsDelegate
 //                                                          selector:@selector(applicationWillTerminate:)
 //          name:NSApplicationWillTerminateNotification object:NSApp];
     }
 
+    NSBundle *mainBundle = [NSBundle mainBundle];
     // the ID of the application we're being injected into:
-    NSString *appID = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleIdentifier"];
+    NSString *appID = [mainBundle objectForInfoDictionaryKey:@"CFBundleIdentifier"];
 
     // ignore LSBackgroundOnly=1 and (a priori) also LSUIElement=1 applications as they don't have their
     // own menu and we thus cannot ensure that they'll be able to exit FS mode (even if they can get into it).
-    if ([[[NSBundle mainBundle] objectForInfoDictionaryKey:@"LSUIElement"] boolValue]) {
+    if ([[mainBundle objectForInfoDictionaryKey:@"LSUIElement"] boolValue]
+            || [[mainBundle objectForInfoDictionaryKey:@"NSUIElement"] boolValue]) {
         NSLog(@"Legacy FullScreen emulation NOT used for \"agent\" application \"%@\" (%@)", getApplicationName(), appID);
         return;
-    } else if ([[[NSBundle mainBundle] objectForInfoDictionaryKey:@"LSBackgroundOnly"] boolValue]
-               || [[[NSBundle mainBundle] objectForInfoDictionaryKey:@"NSBGOnly"] boolValue]) {
+    } else if ([[mainBundle objectForInfoDictionaryKey:@"LSBackgroundOnly"] boolValue]
+               || [[mainBundle objectForInfoDictionaryKey:@"NSBGOnly"] boolValue]) {
         NSLog(@"Legacy FullScreen emulation NOT used for background-only application \"%@\" (%@)", getApplicationName(), appID);
         return;
     }
@@ -423,7 +451,7 @@ static altNSApplicationDelegate *fsDelegate;
                         }
                         if (here) {
                             here = [targetMenu insertItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@""
-                                   atIndex:[targetMenu indexOfItem:here]+1];
+                                    atIndex:[targetMenu indexOfItem:here]+1];
                         } else {
                             here = [targetMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@""];
                         }
@@ -437,6 +465,14 @@ static altNSApplicationDelegate *fsDelegate;
                     targetMenu = [fsDelegate systrayMenu];
                     if (targetMenu) {
                         here = [targetMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@""];
+                        // The application may disable the FS menuitem if it doesn't support (native) full screen mode.
+                        // We track this to hide our systraymenu ... but that doesn't always work. Disabling it here does
+                        // have the expected effect, and as far as I can tell the item will be re-enabled (and the systray item show)
+                        // if (native) fullscreen mode is supported. (See the ALWAYS_ADD_SYSTRAYMENU snippet below).
+                        [here setEnabled:NO];
+                        [[NSNotificationCenter defaultCenter] addObserver:fsDelegate
+                                                                 selector:@selector(menuItemChanged:)
+                                                                     name:NSMenuDidChangeItemNotification object:targetMenu];
                     } else {
                         // last attempt, a hail-mary: the Dock menu.
                         NSApplication *theApp = [NSApplication sharedApplication];
@@ -462,6 +498,18 @@ static altNSApplicationDelegate *fsDelegate;
             }
         }
         if (appOK || here) {
+#ifdef ALWAYS_ADD_SYSTRAYMENU
+            {   NSMenu *fsMenu = [fsDelegate systrayMenu];
+                if (fsMenu) {
+                    NSMenuItem *there = [fsMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"];
+                    [there setKeyEquivalentModifierMask:NSCommandKeyMask|NSControlKeyMask];
+                    [there setEnabled:NO];
+                    [[NSNotificationCenter defaultCenter] addObserver:fsDelegate
+                                                             selector:@selector(menuItemChanged:)
+                                                                 name:NSMenuDidChangeItemNotification object:fsMenu];
+                }
+            }
+#endif // ALWAYS_ADD_SYSTRAYMENU
             // Now we know we can swizzle!
             ZKSwizzle(altNSWindow, NSWindow);
             NSLog(@"Legacy fullscreen emulation for application ID \"%@\" (%@)", appID, [thisPluginBundle bundlePath]);
