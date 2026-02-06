@@ -22,23 +22,6 @@
     #define S_DEALLOC dealloc
 #endif
 
-@interface altNSWindow_stateVars : NSObject
-{
-    @public NSApplicationPresentationOptions m_normalPresOpts;
-    @public NSRect m_normalRect;
-    @public NSUInteger m_normalMask;
-    @public BOOL m_fullScreenActivated, m_toolBarVisible;
-    @public NSToolbar *m_toolBar;
-    @public NSString *m_Title;
-    @public NSURL *m_reprURL;
-    @public NSImage *m_windowIcon;
-    id m_self;
-}
-@end
-
-@implementation altNSWindow_stateVars
-@end
-
 static NSString *getApplicationName()
 {
     NSString *appName;
@@ -56,6 +39,38 @@ static NSString *getApplicationName()
     return appName;
 }
 
+@interface altNSWindow_stateVars : NSObject
+{
+    @public NSApplicationPresentationOptions m_normalPresOpts;
+    @public NSRect m_normalRect;
+    @public NSUInteger m_normalMask;
+    @public BOOL m_fullScreenActivated, m_toolBarVisible;
+    @public NSToolbar *m_toolBar;
+    @public NSString *m_Title;
+    @public NSURL *m_reprURL;
+    @public NSImage *m_windowIcon;
+    id m_self;
+}
+@end
+
+@implementation altNSWindow_stateVars
+@end
+
+@interface altNSApplicationDelegate : NSObject <NSApplicationDelegate>
+{
+    NSStatusItem *m_systrayItem;
+    NSMenu *m_menu;
+}
+- (instancetype)init;
+- (void)dealloc;
+- (NSMenu *)systrayMenu;
+- (void)applicationDidFinishLaunching:(NSNotification *)aNotification;
+- (void)applicationWillTerminate:(NSNotification *)aNotification;
+- (void)menuItemChanged:(NSNotification *)aNotification;
+@end
+
+static altNSApplicationDelegate *fsDelegate = nil;
+
 // From Firefox's nsChildView.h :
 @interface NSView (Undocumented)
 
@@ -66,6 +81,17 @@ static NSString *getApplicationName()
 // marked as needing redisplay.  This method has been present in the same
 // format since at least OS X 10.5.
 - (void)_tileTitlebarAndRedisplay:(BOOL)redisplay;
+@end
+
+@interface altNSWindowDelegate : NSObject <NSWindowDelegate>
+- (NSArray *)customWindowsToEnterFullScreenForWindow:(NSWindow *)window;
+@end
+
+@implementation altNSWindowDelegate
+- (NSArray *)customWindowsToEnterFullScreenForWindow:(NSWindow *)window
+{
+    return [NSArray arrayWithObjects:window, nil];
+}
 @end
 
 @implementation altNSWindow
@@ -126,6 +152,10 @@ static NSString *getApplicationName()
             return;
         }
     }
+//    // For applications where we don't replace the native FS mode:
+//    if (![self delegate]) {
+//        // add a delegate that defines an ultrashort noop FS animation
+//    }
 
     if (ego->m_fullScreenActivated) {
         [self sendFSNotification:NSWindowWillExitFullScreenNotification ifTrue:sendNotification];
@@ -208,6 +238,8 @@ static NSString *getApplicationName()
         // remains visible in front of us, or than the tiny strip that remains there to "catch" it.
         NSApplicationPresentationOptions newPresOpts = ego->m_normalPresOpts | NSApplicationPresentationHideDock;
         if (menuBarsOnAllScreens || [self screen] == [[NSScreen screens] firstObject]) {
+            // adding NSApplicationPresentationAutoHideToolbar is sadly not a solution for
+            // the "toolbar problem" which forces us to hide the toolbar.
             newPresOpts |= NSApplicationPresentationAutoHideMenuBar;
         }
         [NSApp setPresentationOptions:newPresOpts];
@@ -235,19 +267,6 @@ static NSString *getApplicationName()
     _orig(void, behaviour);
 }
 #endif
-@end
-
-@interface altNSApplicationDelegate : NSObject <NSApplicationDelegate>
-{
-    NSStatusItem *m_systrayItem;
-    NSMenu *m_menu;
-}
-- (instancetype)init;
-- (void)dealloc;
-- (NSMenu *)systrayMenu;
-- (void)applicationDidFinishLaunching:(NSNotification *)aNotification;
-- (void)applicationWillTerminate:(NSNotification *)aNotification;
-- (void)menuItemChanged:(NSNotification *)aNotification;
 @end
 
 @implementation altNSApplicationDelegate
@@ -359,7 +378,6 @@ static NSString *getApplicationName()
     }
 @end
 
-static altNSApplicationDelegate *fsDelegate;
 @implementation LegacyFullScreen
 +(void) load
 {
