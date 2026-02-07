@@ -44,12 +44,14 @@ static NSString *getApplicationName()
     @public NSApplicationPresentationOptions m_normalPresOpts;
     @public NSRect m_normalRect;
     @public NSUInteger m_normalMask;
-    @public BOOL m_fullScreenActivated, m_toolBarVisible;
+    @public BOOL m_fullScreenActivated, m_toolBarVisible,
+                 m_delegateSwizzled;
     @public NSToolbar *m_toolBar;
     @public NSString *m_Title;
     @public NSURL *m_reprURL;
     @public NSImage *m_windowIcon;
-    id m_self;
+    @public id m_self;
+    @public id<NSWindowDelegate> m_customDelegate;
 }
 @end
 
@@ -84,14 +86,71 @@ static altNSApplicationDelegate *fsDelegate = nil;
 @end
 
 @interface altNSWindowDelegate : NSObject <NSWindowDelegate>
-- (NSArray *)customWindowsToEnterFullScreenForWindow:(NSWindow *)window;
+- (NSArray*)customWindowsToEnterFullScreenForWindow:(NSWindow *)window;
+- (NSArray*)customWindowsToExitFullScreenForWindow:(NSWindow*)window;
+- (void)window:(NSWindow *)window startCustomAnimationToEnterFullScreenWithDuration:(NSTimeInterval)duration;
+- (void)window:(NSWindow *)window startCustomAnimationToExitFullScreenWithDuration:(NSTimeInterval)duration;
+// (void)windowDidClose:(NSNotification*)aNotification;
 @end
 
 @implementation altNSWindowDelegate
+// adapted from https://github.com/mpv-player/mpv/blob/235eb60671c899d55b1174043940763b250fa3b8/video/out/cocoa/window.m#L156C1-L171C1
 - (NSArray *)customWindowsToEnterFullScreenForWindow:(NSWindow *)window
 {
-    return [NSArray arrayWithObjects:window, nil];
+//    NSLog(@"%s %@, %@", __PRETTY_FUNCTION__, self, window);
+    return [NSArray arrayWithObject:window];
 }
+
+- (NSArray*)customWindowsToExitFullScreenForWindow:(NSWindow*)window
+{
+//    NSLog(@"%s %@, %@", __PRETTY_FUNCTION__, self, window);
+    return [NSArray arrayWithObject:window];
+}
+
+- (void)window:(NSWindow *)window startCustomAnimationToEnterFullScreenWithDuration:(NSTimeInterval)duration
+{
+//    NSLog(@"%s %@ %@ %g", __PRETTY_FUNCTION__, self, window, duration);
+    altNSWindow_stateVars *store = objc_getAssociatedObject(window, (__bridge const void *)(window));
+    if (store && !store->m_fullScreenActivated) {
+        store->m_normalRect = [window frame];
+        store->m_normalMask = [window styleMask];
+        store->m_normalPresOpts = [NSApp presentationOptions];
+        store->m_fullScreenActivated = YES;
+//        NSLog(@"saved geo %gx%g+%g+%g",
+//              store->m_normalRect.size.width, store->m_normalRect.size.height,
+//              store->m_normalRect.origin.x, store->m_normalRect.origin.y);
+    } else {
+        NSLog(@"%s - no state store for window %@!", __PRETTY_FUNCTION__, window);
+    }
+    // this method is responsible for bringing the target window to fullscreen size.
+    [window setFrame:[[window screen] visibleFrame] display:YES animate:NO];
+    NSLog(@"Activated fast native fullscreen");
+}
+
+- (void)window:(NSWindow *)window startCustomAnimationToExitFullScreenWithDuration:(NSTimeInterval)duration
+{
+//    NSLog(@"%s %@ %@ %g", __PRETTY_FUNCTION__, self, window, duration);
+    altNSWindow_stateVars *store = objc_getAssociatedObject(window, (__bridge const void *)(window));
+    if (store && store->m_fullScreenActivated) {
+        [window setStyleMask:store->m_normalMask];
+        // this method is responsible for restoring the windows's original size.
+        // we also restore a few other settings a bit earlier; that seems to speed up matters a bit.
+        [window setFrame:store->m_normalRect display:YES animate:NO];
+        [NSApp setPresentationOptions:store->m_normalPresOpts];
+        store->m_fullScreenActivated = NO;
+//        NSLog(@"restored geo %gx%g+%g+%g",
+//              store->m_normalRect.size.width, store->m_normalRect.size.height,
+//              store->m_normalRect.origin.x, store->m_normalRect.origin.y);
+    } else {
+        NSLog(@"%s - no state store for window %@!", __PRETTY_FUNCTION__, window);
+    }
+    NSLog(@"Exit from fast native fullscreen");
+}
+
+//- (void)windowDidClose:(NSNotification*)aNotification
+//{
+//    NSLog(@"%s %@ %@", __PRETTY_FUNCTION__, self, aNotification);
+//}
 @end
 
 @implementation altNSWindow
@@ -101,6 +160,26 @@ static altNSApplicationDelegate *fsDelegate = nil;
         [[NSNotificationCenter defaultCenter] postNotification:[NSNotification notificationWithName:notif
                                                         object:self]];
     }
+}
+
+- (void)setStyleMask:(NSUInteger)styleMask
+{
+    // copied from https://github.com/mpv-player/mpv/blob/235eb60671c899d55b1174043940763b250fa3b8/video/out/cocoa/window.m#L74
+    NSResponder *nR = [self firstResponder];
+    ZKOrig(void,styleMask);
+    [self makeFirstResponder:nR];
+}
+
+static BOOL add_NSWinDelegateSelector(NSObject *destInstance, SEL newSelector)
+{   const Method newMethod = class_getInstanceMethod([altNSWindowDelegate class], newSelector);
+    return class_addMethod([destInstance class], newSelector,
+                method_getImplementation(newMethod), method_getTypeEncoding(newMethod));
+}
+
+static IMP replace_NSWinDelegateSelector(NSObject *destInstance, SEL newSelector)
+{   const Method newMethod = class_getInstanceMethod([altNSWindowDelegate class], newSelector);
+    return class_replaceMethod([destInstance class], newSelector,
+                method_getImplementation(newMethod), method_getTypeEncoding(newMethod));
 }
 
 - (void)toggleFullScreen:(id)sender
@@ -140,6 +219,8 @@ static altNSApplicationDelegate *fsDelegate = nil;
             ego->m_toolBar = [self toolbar];
             ego->m_toolBarVisible = (ego->m_toolBar && [ego->m_toolBar isVisible]);
             ego->m_self = self;
+            ego->m_delegateSwizzled = NO;
+            ego->m_customDelegate = nil;
 
             if ([appID isEqualToString:@"org.mozilla.firefox"]) {
                 isMozilla = YES;
@@ -152,10 +233,40 @@ static altNSApplicationDelegate *fsDelegate = nil;
             return;
         }
     }
-//    // For applications where we don't replace the native FS mode:
-//    if (![self delegate]) {
-//        // add a delegate that defines an ultrashort noop FS animation
-//    }
+    NSObject *wDelegate = [self delegate];
+    // For applications where we don't replace the native FS mode:
+    if (!wDelegate) {
+        // add a delegate that defines an ultrashort noop FS animation
+        if (!ego->m_customDelegate) {
+            // let's hope that our cached copy remains valid even if it gets replaced!
+            // (for now I have not yet encountered windows that did not yet have a delegate...)
+            ego->m_customDelegate = [[altNSWindowDelegate alloc] init];
+        }
+        [self setDelegate:ego->m_customDelegate];
+        NSLog(@"%@ now has delegate %@[%@]", self, wDelegate, [wDelegate className]);
+    } else if (!ego->m_delegateSwizzled) {
+        // here, we need to be discriminate, more than ZKSwizzle would allow to be.
+        // The first two animation-related methods are added, an operation that will fail
+        // if the target delegate already has an implementation. That should be OK.
+        if (!add_NSWinDelegateSelector(wDelegate, @selector(customWindowsToEnterFullScreenForWindow:))) {
+            NSLog(@"Failed to add delegate method customWindowsToEnterFullScreenForWindow:");
+        }
+        if (!add_NSWinDelegateSelector(wDelegate, @selector(customWindowsToExitFullScreenForWindow:))) {
+            NSLog(@"Failed to add delegate method customWindowsToExitFullScreenForWindow:");
+        }
+        // Existing implementations of the actual animation methods need to be replaced if
+        // we want to drop the entire animation. Or else added, hence the use of a different function
+        if (replace_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToEnterFullScreenWithDuration:))) {
+            NSLog(@"Replacing an existing method window:startCustomAnimationToEnterFullScreenWithDuration:!");
+        }
+        if (replace_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToExitFullScreenWithDuration:))) {
+            NSLog(@"Replacing an existing method window:startCustomAnimationToExitFullScreenWithDuration!");
+        }
+        ego->m_delegateSwizzled = YES;
+    }
+//    // test the custom/swizzled delegate:
+//    ZKOrig(void);
+//    return;
 
     if (ego->m_fullScreenActivated) {
         [self sendFSNotification:NSWindowWillExitFullScreenNotification ifTrue:sendNotification];
@@ -254,19 +365,6 @@ static altNSApplicationDelegate *fsDelegate = nil;
     }
 }
 
-#ifdef OVERRIDE_SETCOLLECTIONBEHAVIOR
-- (void)setCollectionBehavior:(NSWindowCollectionBehavior)behaviour
-{
-    if (behaviour & NSWindowCollectionBehaviorFullScreenPrimary) {
-        behaviour &= ~NSWindowCollectionBehaviorFullScreenPrimary;
-    }
-    // we can call [self altSetCollectionBehaviour:behaviour] here without risk
-    // for infinite recursion because will in fact call the original [NSWindow setCollectionBehavior]
-    // thanks to the call to method_exchangeImplementations()
-    NSLog(@"calling the actual [NSWindow setCollectionBehavior] method!");
-    _orig(void, behaviour);
-}
-#endif
 @end
 
 @implementation altNSApplicationDelegate
