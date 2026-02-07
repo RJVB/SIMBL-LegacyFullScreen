@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE QtCreatorProject>
-<!-- Written by QtCreator 4.9.82, 2026-02-07T00:54:53. -->
+<!-- Written by QtCreator 4.9.82, 2026-02-07T02:28:31. -->
 <qtcreator>
  <data>
   <variable>EnvironmentId</variable>
@@ -59,10 +59,7 @@
    <value type="bool" key="ClangCodeModel.UseGlobalConfig">false</value>
    <value type="QString" key="ClangCodeModel.WarningConfigId">{c2b8da18-7b27-4d97-beb4-9e77fc50fb11}</value>
    <value type="bool" key="ClangTools.BuildBeforeAnalysis">false</value>
-   <value type="QString" key="ClangTools.DiagnosticConfig">{56d4e093-cf9f-4ad8-bf01-7412e4751a4c}</value>
-   <valuelist type="QVariantList" key="ClangTools.SelectedDirs">
-    <value type="QString">/Volumes/Debian/Users/bertin/work/src/MacOSX/LegacyNativeFScreen-git/qtcreator/LegacyFullScreen.pro</value>
-   </valuelist>
+   <valuelist type="QVariantList" key="ClangTools.SelectedDirs"/>
    <valuelist type="QVariantList" key="ClangTools.SelectedFiles"/>
    <valuelist type="QVariantList" key="ClangTools.SuppressedDiagnostics"/>
    <value type="bool" key="ClangTools.UseGlobalSettings">true</value>

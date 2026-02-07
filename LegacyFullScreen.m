@@ -107,6 +107,11 @@ static altNSApplicationDelegate *fsDelegate = nil;
     return [NSArray arrayWithObject:window];
 }
 
+// enter and exit animations for the FS transition. Ours just scale the
+// target window to screen size or to its original size, and thus maintain state.
+// Note that we cannot change the additional transition that takes place behind us
+// and that we still have to wait for ... AND that's the longer one! That one is
+// handled by Mission Control aka the Dock.
 - (void)window:(NSWindow *)window startCustomAnimationToEnterFullScreenWithDuration:(NSTimeInterval)duration
 {
 //    NSLog(@"%s %@ %@ %g", __PRETTY_FUNCTION__, self, window, duration);
@@ -120,13 +125,15 @@ static altNSApplicationDelegate *fsDelegate = nil;
 //              store->m_normalRect.size.width, store->m_normalRect.size.height,
 //              store->m_normalRect.origin.x, store->m_normalRect.origin.y);
     } else {
-        NSLog(@"%s - no state store for window %@!", __PRETTY_FUNCTION__, window);
+        NSLog(@"%s - no or inconsistent state store for window %@!", __PRETTY_FUNCTION__, window);
     }
     // this method is responsible for bringing the target window to fullscreen size.
     [window setFrame:[[window screen] visibleFrame] display:YES animate:NO];
     NSLog(@"Activated fast native fullscreen");
 }
 
+// Restoring the stylemask and presentation options on exit seem to
+// speed up the process a tiny bit.
 - (void)window:(NSWindow *)window startCustomAnimationToExitFullScreenWithDuration:(NSTimeInterval)duration
 {
 //    NSLog(@"%s %@ %@ %g", __PRETTY_FUNCTION__, self, window, duration);
@@ -134,7 +141,6 @@ static altNSApplicationDelegate *fsDelegate = nil;
     if (store && store->m_fullScreenActivated) {
         [window setStyleMask:store->m_normalMask];
         // this method is responsible for restoring the windows's original size.
-        // we also restore a few other settings a bit earlier; that seems to speed up matters a bit.
         [window setFrame:store->m_normalRect display:YES animate:NO];
         [NSApp setPresentationOptions:store->m_normalPresOpts];
         store->m_fullScreenActivated = NO;
@@ -142,7 +148,10 @@ static altNSApplicationDelegate *fsDelegate = nil;
 //              store->m_normalRect.size.width, store->m_normalRect.size.height,
 //              store->m_normalRect.origin.x, store->m_normalRect.origin.y);
     } else {
-        NSLog(@"%s - no state store for window %@!", __PRETTY_FUNCTION__, window);
+        NSLog(@"%s - no state or inconsistent store for window %@!", __PRETTY_FUNCTION__, window);
+        if ([self respondsToSelector:@selector(windowDidFailToExitFullScreen:)]) {
+            [self windowDidFailToExitFullScreen:window];
+        }
     }
     NSLog(@"Exit from fast native fullscreen");
 }
@@ -170,11 +179,11 @@ static altNSApplicationDelegate *fsDelegate = nil;
     [self makeFirstResponder:nR];
 }
 
-static BOOL add_NSWinDelegateSelector(NSObject *destInstance, SEL newSelector)
-{   const Method newMethod = class_getInstanceMethod([altNSWindowDelegate class], newSelector);
-    return class_addMethod([destInstance class], newSelector,
-                method_getImplementation(newMethod), method_getTypeEncoding(newMethod));
-}
+//static BOOL add_NSWinDelegateSelector(NSObject *destInstance, SEL newSelector)
+//{   const Method newMethod = class_getInstanceMethod([altNSWindowDelegate class], newSelector);
+//    return class_addMethod([destInstance class], newSelector,
+//                method_getImplementation(newMethod), method_getTypeEncoding(newMethod));
+//}
 
 static IMP replace_NSWinDelegateSelector(NSObject *destInstance, SEL newSelector)
 {   const Method newMethod = class_getInstanceMethod([altNSWindowDelegate class], newSelector);
@@ -246,21 +255,23 @@ static IMP replace_NSWinDelegateSelector(NSObject *destInstance, SEL newSelector
         NSLog(@"%@ now has delegate %@[%@]", self, wDelegate, [wDelegate className]);
     } else if (!ego->m_delegateSwizzled) {
         // here, we need to be discriminate, more than ZKSwizzle would allow to be.
-        // The first two animation-related methods are added, an operation that will fail
-        // if the target delegate already has an implementation. That should be OK.
-        if (!add_NSWinDelegateSelector(wDelegate, @selector(customWindowsToEnterFullScreenForWindow:))) {
-            NSLog(@"Failed to add delegate method customWindowsToEnterFullScreenForWindow:");
+        // We only need to add or replace the following 4 methods. You'd think that
+        // we should be able to leave customWindowsTo?ForWindow methods, but it turns
+        // out that our 2 animation methods really expect the window they work on to
+        // be *this* window (self). So, we replace them too.
+        if (replace_NSWinDelegateSelector(wDelegate, @selector(customWindowsToEnterFullScreenForWindow:))) {
+            NSLog(@"Replacing existing method customWindowsToEnterFullScreenForWindow:!");
         }
-        if (!add_NSWinDelegateSelector(wDelegate, @selector(customWindowsToExitFullScreenForWindow:))) {
-            NSLog(@"Failed to add delegate method customWindowsToExitFullScreenForWindow:");
+        if (replace_NSWinDelegateSelector(wDelegate, @selector(customWindowsToExitFullScreenForWindow:))) {
+            NSLog(@"Replacing existing method customWindowsToExitFullScreenForWindow:!");
         }
         // Existing implementations of the actual animation methods need to be replaced if
-        // we want to drop the entire animation. Or else added, hence the use of a different function
+        // we want to drop the entire animation. Or else added.
         if (replace_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToEnterFullScreenWithDuration:))) {
-            NSLog(@"Replacing an existing method window:startCustomAnimationToEnterFullScreenWithDuration:!");
+            NSLog(@"Replacing existing method window:startCustomAnimationToEnterFullScreenWithDuration:!");
         }
         if (replace_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToExitFullScreenWithDuration:))) {
-            NSLog(@"Replacing an existing method window:startCustomAnimationToExitFullScreenWithDuration!");
+            NSLog(@"Replacing existing method window:startCustomAnimationToExitFullScreenWithDuration:!");
         }
         ego->m_delegateSwizzled = YES;
     }
