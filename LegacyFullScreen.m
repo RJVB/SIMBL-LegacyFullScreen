@@ -72,6 +72,7 @@ static NSString *getApplicationName()
 @end
 
 static altNSApplicationDelegate *fsDelegate = nil;
+static BOOL fastOnly = NO;
 
 // From Firefox's nsChildView.h :
 @interface NSView (Undocumented)
@@ -242,42 +243,44 @@ static IMP replace_NSWinDelegateSelector(NSObject *destInstance, SEL newSelector
             return;
         }
     }
-    NSObject *wDelegate = [self delegate];
-    // For applications where we don't replace the native FS mode:
-    if (!wDelegate) {
-        // add a delegate that defines an ultrashort noop FS animation
-        if (!ego->m_customDelegate) {
-            // let's hope that our cached copy remains valid even if it gets replaced!
-            // (for now I have not yet encountered windows that did not yet have a delegate...)
-            ego->m_customDelegate = [[altNSWindowDelegate alloc] init];
+
+    if (fastOnly) {
+        NSObject *wDelegate = [self delegate];
+        // For applications where we don't replace the native FS mode:
+        if (!wDelegate) {
+            // add a delegate that defines an ultrashort noop FS animation
+            if (!ego->m_customDelegate) {
+                // let's hope that our cached copy remains valid even if it gets replaced!
+                // (for now I have not yet encountered windows that did not yet have a delegate...)
+                ego->m_customDelegate = [[altNSWindowDelegate alloc] init];
+            }
+            [self setDelegate:ego->m_customDelegate];
+            NSLog(@"%@ now has delegate %@[%@]", self, wDelegate, [wDelegate className]);
+        } else if (!ego->m_delegateSwizzled) {
+            // here, we need to be discriminate, more than ZKSwizzle would allow to be.
+            // We only need to add or replace the following 4 methods. You'd think that
+            // we should be able to leave customWindowsTo?ForWindow methods, but it turns
+            // out that our 2 animation methods really expect the window they work on to
+            // be *this* window (self). So, we replace them too.
+            if (replace_NSWinDelegateSelector(wDelegate, @selector(customWindowsToEnterFullScreenForWindow:))) {
+                NSLog(@"Replacing existing method customWindowsToEnterFullScreenForWindow:!");
+            }
+            if (replace_NSWinDelegateSelector(wDelegate, @selector(customWindowsToExitFullScreenForWindow:))) {
+                NSLog(@"Replacing existing method customWindowsToExitFullScreenForWindow:!");
+            }
+            // Existing implementations of the actual animation methods need to be replaced if
+            // we want to drop the entire animation. Or else added.
+            if (replace_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToEnterFullScreenWithDuration:))) {
+                NSLog(@"Replacing existing method window:startCustomAnimationToEnterFullScreenWithDuration:!");
+            }
+            if (replace_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToExitFullScreenWithDuration:))) {
+                NSLog(@"Replacing existing method window:startCustomAnimationToExitFullScreenWithDuration:!");
+            }
+            ego->m_delegateSwizzled = YES;
         }
-        [self setDelegate:ego->m_customDelegate];
-        NSLog(@"%@ now has delegate %@[%@]", self, wDelegate, [wDelegate className]);
-    } else if (!ego->m_delegateSwizzled) {
-        // here, we need to be discriminate, more than ZKSwizzle would allow to be.
-        // We only need to add or replace the following 4 methods. You'd think that
-        // we should be able to leave customWindowsTo?ForWindow methods, but it turns
-        // out that our 2 animation methods really expect the window they work on to
-        // be *this* window (self). So, we replace them too.
-        if (replace_NSWinDelegateSelector(wDelegate, @selector(customWindowsToEnterFullScreenForWindow:))) {
-            NSLog(@"Replacing existing method customWindowsToEnterFullScreenForWindow:!");
-        }
-        if (replace_NSWinDelegateSelector(wDelegate, @selector(customWindowsToExitFullScreenForWindow:))) {
-            NSLog(@"Replacing existing method customWindowsToExitFullScreenForWindow:!");
-        }
-        // Existing implementations of the actual animation methods need to be replaced if
-        // we want to drop the entire animation. Or else added.
-        if (replace_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToEnterFullScreenWithDuration:))) {
-            NSLog(@"Replacing existing method window:startCustomAnimationToEnterFullScreenWithDuration:!");
-        }
-        if (replace_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToExitFullScreenWithDuration:))) {
-            NSLog(@"Replacing existing method window:startCustomAnimationToExitFullScreenWithDuration:!");
-        }
-        ego->m_delegateSwizzled = YES;
+        ZKOrig(void);
+        return;
     }
-//    // test the custom/swizzled delegate:
-//    ZKOrig(void);
-//    return;
 
     if (ego->m_fullScreenActivated) {
         [self sendFSNotification:NSWindowWillExitFullScreenNotification ifTrue:sendNotification];
@@ -517,18 +520,25 @@ static IMP replace_NSWinDelegateSelector(NSObject *destInstance, SEL newSelector
     }
 
     NSBundle *thisPluginBundle = [NSBundle bundleForClass:[self class]];
+    // Try to read the plugin preferences (from ~/Library/Preferences/org.RJVB.LegacyFullScreen.plist).
+    // Will probably fail if the host application is sandboxed.
     NSDictionary *defaults = thisPluginBundle? [[[NSUserDefaults alloc] init] persistentDomainForName:[thisPluginBundle bundleIdentifier]] : nil;
+    // appFSMode is read from the *host* application preferences - those are always readable, even in sandboxed applications.
+    NSString *appFSMode = [[NSUserDefaults standardUserDefaults] stringForKey:@"ApplicationLegacyFullScreenMode"];
+    if (!appFSMode) {
+        // if not set, we go for the full legacy FullScreen experience.
+        appFSMode = @"Native";
+    }
 
     // Try to get the blackList of appIDs that we shouldn't serve
     // First, see if the user set any defaults. These should be readable even in sandboxed host apps.
     NSArray *blackList = nil,
             *userBlackList = [defaults objectForKey:@"SIMBLApplicationIdentifierBlacklist"];
-//    NSLog(@"blacklist from user prefs: %@ (%@;%d)", blackList, [blackList className], [blackList isKindOfClass:[NSArray class]]);
     if (![userBlackList isKindOfClass:[NSArray class]]) {
         userBlackList = nil;
     }
     if (thisPluginBundle) {
-        // next, try to get it from the plugin's Info.plist. This may fail in sandboxed host apps!
+        // next, try to get it from the plugin's Info.plist. This may (but shouldn't!) fail in sandboxed host apps!
         NSDictionary *infoPList = [thisPluginBundle infoDictionary];
         // reuse the info key also used at the level of the SIMBL agent (for all plugins)
         // (evidently this doesn't interfere with that "global" key!)
@@ -536,12 +546,29 @@ static IMP replace_NSWinDelegateSelector(NSObject *destInstance, SEL newSelector
         //NSLog(@"blacklist from Info.plist: %@ (%@;%d)", blackList, [blackList className], [blackList isKindOfClass:[NSArray class]]);
     }
     if (!blackList || ![blackList isKindOfClass:[NSArray class]]) {
-        // fall back on a hardcoded list
+        // fall back on a hardcoded list.
+        // Note that we blacklist the Preview application (also via the bundle Info.plist) because
+        // even in "Fast Native" mode its behaviour is ever so slightly different. The user can
+        // override this by setting ApplicationLegacyFullScreenMode=FastNative in Preview's preferences (with `default`!)
         blackList = [NSArray arrayWithObjects:@"com.apple.Preview",@"com.apple.finder",nil];
         NSLog(@"Warning: using hardcoded default appID blacklist (%@)!", blackList);
     }
 
-    // Now do the same for a whiteList of applications which don't require adding a menu item,
+    // Now do the same for an overriding "greyList" of applications which are to use a fast(er) form
+    // of the native FullScreen mode, i.e. an instantaneous resize instead of an animated one.
+    // Note that this isn't actually faster in absolute terms as Mission Control (aka the Dock)
+    // executes the background part of the animation and we still have to wait for that.
+    // Note that there is no builtin list, and that entries on this list override the ones on the
+    // blacklist.
+    NSArray *userFastNativeList = [defaults objectForKey:@"ApplicationIdentifierFastNativeList"];
+    if (![userFastNativeList isKindOfClass:[NSArray class]]) {
+        userFastNativeList = nil;
+    }
+    if ([userFastNativeList containsObject:appID] || [appFSMode compare:@"FastNative" options:NSCaseInsensitiveSearch] == NSOrderedSame) {
+        fastOnly = YES;
+    }
+
+    // Finally, do the same for a whiteList of applications which don't require adding a menu item,
     // to exit from our FS mode, because they already provide their own, compatible mechanism.
     NSArray *whiteList = [NSArray arrayWithObjects:@"com.apple.firefox",nil],
             *userWhiteList = [defaults objectForKey:@"ApplicationIdentifierWhitelist"];
@@ -549,7 +576,9 @@ static IMP replace_NSWinDelegateSelector(NSObject *destInstance, SEL newSelector
         userWhiteList = nil;
     }
 
-    if (![blackList containsObject:appID] && ![userBlackList containsObject:appID]) {
+    // fast-native mode trumps blacklisting
+    if (fastOnly || (![blackList containsObject:appID] && ![userBlackList containsObject:appID]
+                     && [appFSMode compare:@"No" options:NSCaseInsensitiveSearch] != NSOrderedSame)) {
         // see if we need to provide a "Enter Full Screen" menu item so the user can exit FS mode again:
         NSMenu *mainMenu = [NSApp mainMenu];
         if (!mainMenu) {
@@ -557,7 +586,7 @@ static IMP replace_NSWinDelegateSelector(NSObject *destInstance, SEL newSelector
         }
         NSMenuItem *here = [mainMenu itemWithTitle:@"Enter Full Screen" recursiveSearch:YES];
         BOOL appOK = [whiteList containsObject:appID] || [userWhiteList containsObject:appID];
-        if (!appOK && !here && mainMenu) {
+        if (!appOK && !fastOnly && !here && mainMenu) {
             NSMenu *targetMenu = [[mainMenu itemWithTitle:@"View"] submenu];
             if (targetMenu) {
                 // add "Enter FullScreen Ctrl-Cmd-F" if it doesn't already exist
@@ -624,7 +653,7 @@ static IMP replace_NSWinDelegateSelector(NSObject *destInstance, SEL newSelector
                 }
             }
         }
-        if (appOK || here) {
+        if (appOK || fastOnly || here) {
 #ifdef ALWAYS_ADD_SYSTRAYMENU
             {   NSMenu *fsMenu = [fsDelegate systrayMenu];
                 if (fsMenu) {
@@ -639,7 +668,11 @@ static IMP replace_NSWinDelegateSelector(NSObject *destInstance, SEL newSelector
 #endif // ALWAYS_ADD_SYSTRAYMENU
             // Now we know we can swizzle!
             ZKSwizzle(altNSWindow, NSWindow);
-            NSLog(@"Legacy fullscreen emulation for application ID \"%@\" (%@)", appID, [thisPluginBundle bundlePath]);
+            if (fastOnly) {
+                NSLog(@"\"Fast\" native fullscreen for application ID \"%@\" (%@)", appID, [thisPluginBundle bundlePath]);
+            } else {
+                NSLog(@"Legacy fullscreen emulation for application ID \"%@\" (%@)", appID, [thisPluginBundle bundlePath]);
+            }
         } else {
             NSLog(@"Couldn't add the missing \"Enter Full Screen\" menu; NO legacy fullscreen emulation for application ID \"%@\" (%@)", appID, [thisPluginBundle bundlePath]);
         }
