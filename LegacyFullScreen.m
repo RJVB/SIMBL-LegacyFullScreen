@@ -583,7 +583,7 @@ static BOOL exchange_NSWinDelegateSelector(NSObject *destInstance, SEL oldSelect
     NSString *appFSMode = [[NSUserDefaults standardUserDefaults] stringForKey:@"ApplicationLegacyFullScreenMode"];
     if (!appFSMode) {
         // if not set, we go for the full legacy FullScreen experience.
-        appFSMode = @"Native";
+        appFSMode = @"Legacy";
     }
 
     // Try to get the blackList of appIDs that we shouldn't serve
