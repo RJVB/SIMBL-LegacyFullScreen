@@ -86,14 +86,21 @@ static BOOL fastOnly = NO;
 - (void)_tileTitlebarAndRedisplay:(BOOL)redisplay;
 @end
 
+// Delegate that provides FS animation methods for applications that don't have their own
 @interface altNSWindowDelegate : NSObject <NSWindowDelegate>
 - (NSArray*)customWindowsToEnterFullScreenForWindow:(NSWindow *)window;
 - (NSArray*)customWindowsToExitFullScreenForWindow:(NSWindow*)window;
 - (void)window:(NSWindow *)window startCustomAnimationToEnterFullScreenWithDuration:(NSTimeInterval)duration;
 - (void)window:(NSWindow *)window startCustomAnimationToExitFullScreenWithDuration:(NSTimeInterval)duration;
-// (void)windowDidClose:(NSNotification*)aNotification;
 @end
 
+//// Delegate that shortens the animations in applications that implement custom ones.
+//@interface alt2NSWindowDelegate : NSObject <NSWindowDelegate>
+//- (void)window:(NSWindow *)window startCustomAnimationToEnterFullScreenIgnoringDuration:(NSTimeInterval)duration;
+//- (void)window:(NSWindow *)window startCustomAnimationToExitFullScreenIgnoringDuration:(NSTimeInterval)duration;
+//@end
+
+// Delegate that provides FS animation methods for applications that don't have their own
 @implementation altNSWindowDelegate
 // adapted from https://github.com/mpv-player/mpv/blob/235eb60671c899d55b1174043940763b250fa3b8/video/out/cocoa/window.m#L156C1-L171C1
 - (NSArray *)customWindowsToEnterFullScreenForWindow:(NSWindow *)window
@@ -150,17 +157,36 @@ static BOOL fastOnly = NO;
 //              store->m_normalRect.origin.x, store->m_normalRect.origin.y);
     } else {
         NSLog(@"%s - no state or inconsistent store for window %@!", __PRETTY_FUNCTION__, window);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wundeclared-selector"
         if ([self respondsToSelector:@selector(windowDidFailToExitFullScreen:)]) {
             [self windowDidFailToExitFullScreen:window];
         }
+#pragma GCC diagnostic pop
     }
     NSLog(@"Exit from fast native fullscreen");
 }
+@end
 
-//- (void)windowDidClose:(NSNotification*)aNotification
-//{
-//    NSLog(@"%s %@ %@", __PRETTY_FUNCTION__, self, aNotification);
-//}
+// Delegate that shortens the animations in applications that implement custom ones.
+@implementation  NSObject (alt2NSWindowDelegate)
+static const NSTimeInterval shortDuration = 0.001;
+- (void)window:(NSWindow *)window startCustomAnimationToEnterFullScreenIgnoringDuration:(NSTimeInterval)duration
+{
+//    NSLog(@"Starting custom enter FS animation with duration %g instead of %g", shortDuration, duration );
+    // this looks strange, but since we (startCustomAnimationToEnterFullScreenIgnoringDuration:) get called
+    // instead of startCustomAnimationToEnterFullScreenWithDuration: , startCustomAnimationToEnterFullScreenWithDuration:
+    // will get called instead of startCustomAnimationToEnterFullScreenIgnoringDuration: . Follow? :)
+    [self window:window startCustomAnimationToEnterFullScreenIgnoringDuration:shortDuration];
+}
+
+- (void)window:(NSWindow *)window startCustomAnimationToExitFullScreenIgnoringDuration:(NSTimeInterval)duration
+{
+    {
+//        NSLog(@"Starting custom exit FS animation with duration %g instead of %g", shortDuration, duration );
+        [self window:window startCustomAnimationToExitFullScreenIgnoringDuration:shortDuration];
+    }
+}
 @end
 
 @implementation altNSWindow
@@ -176,20 +202,42 @@ static BOOL fastOnly = NO;
 {
     // copied from https://github.com/mpv-player/mpv/blob/235eb60671c899d55b1174043940763b250fa3b8/video/out/cocoa/window.m#L74
     NSResponder *nR = [self firstResponder];
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wlanguage-extension-token"
     ZKOrig(void,styleMask);
+#pragma GCC diagnostic push
     [self makeFirstResponder:nR];
 }
 
-//static BOOL add_NSWinDelegateSelector(NSObject *destInstance, SEL newSelector)
-//{   const Method newMethod = class_getInstanceMethod([altNSWindowDelegate class], newSelector);
-//    return class_addMethod([destInstance class], newSelector,
-//                method_getImplementation(newMethod), method_getTypeEncoding(newMethod));
-//}
-
-static IMP replace_NSWinDelegateSelector(NSObject *destInstance, SEL newSelector)
+static BOOL add_NSWinDelegateSelector(NSObject *destInstance, SEL newSelector)
 {   const Method newMethod = class_getInstanceMethod([altNSWindowDelegate class], newSelector);
-    return class_replaceMethod([destInstance class], newSelector,
+    return class_addMethod([destInstance class], newSelector,
                 method_getImplementation(newMethod), method_getTypeEncoding(newMethod));
+}
+
+static IMP replace_NSWinDelegateSelector(NSObject *destInstance, SEL theSelector)
+{   const Method newMethod = class_getInstanceMethod([altNSWindowDelegate class], theSelector);
+    return class_replaceMethod([destInstance class], theSelector,
+                method_getImplementation(newMethod), method_getTypeEncoding(newMethod));
+}
+
+static BOOL exchange_NSWinDelegateSelector(NSObject *destInstance, SEL oldSelector, Class newClass, SEL newSelector)
+{
+    Class class = [destInstance class];
+    Method old = class_getInstanceMethod(class, oldSelector);
+    Method new = class_getInstanceMethod(newClass, newSelector);
+    // check if a superclass provided the method to swizzle (i.e. can we add the method to the target class?)
+    // See: https://www.mikeash.com/pyblog/friday-qa-2010-01-29-method-replacement-for-fun-and-profit.html
+    if (class_addMethod(class, oldSelector, method_getImplementation(new), method_getTypeEncoding(new))) {
+        // now replace the new with the old (sic, the other way round!)
+        return class_replaceMethod(class, newSelector, method_getImplementation(old), method_getTypeEncoding(old)) != nil;
+    }
+    // target class provides the method to swizzle:
+    if (old && new) {
+        method_exchangeImplementations(old, new);
+        return YES;
+    }
+    return NO;
 }
 
 - (void)toggleFullScreen:(id)sender
@@ -261,20 +309,28 @@ static IMP replace_NSWinDelegateSelector(NSObject *destInstance, SEL newSelector
             // We only need to add or replace the following 4 methods. You'd think that
             // we should be able to leave customWindowsTo?ForWindow methods, but it turns
             // out that our 2 animation methods really expect the window they work on to
-            // be *this* window (self). So, we replace them too.
-            if (replace_NSWinDelegateSelector(wDelegate, @selector(customWindowsToEnterFullScreenForWindow:))) {
-                NSLog(@"Replacing existing method customWindowsToEnterFullScreenForWindow:!");
-            }
-            if (replace_NSWinDelegateSelector(wDelegate, @selector(customWindowsToExitFullScreenForWindow:))) {
-                NSLog(@"Replacing existing method customWindowsToExitFullScreenForWindow:!");
-            }
-            // Existing implementations of the actual animation methods need to be replaced if
-            // we want to drop the entire animation. Or else added.
-            if (replace_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToEnterFullScreenWithDuration:))) {
-                NSLog(@"Replacing existing method window:startCustomAnimationToEnterFullScreenWithDuration:!");
-            }
-            if (replace_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToExitFullScreenWithDuration:))) {
-                NSLog(@"Replacing existing method window:startCustomAnimationToExitFullScreenWithDuration:!");
+            // be *this* window (self). (So, we replace them too. Or not... TODO)
+            if (add_NSWinDelegateSelector(wDelegate, @selector(customWindowsToEnterFullScreenForWindow:))
+                    && add_NSWinDelegateSelector(wDelegate, @selector(customWindowsToExitFullScreenForWindow:))) {
+                // Existing implementations of the actual animation methods need to be replaced if
+                // we want to drop the entire animation. Or else added.
+                if (replace_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToEnterFullScreenWithDuration:))) {
+                    NSLog(@"Added method window:startCustomAnimationToEnterFullScreenWithDuration:!");
+                }
+                if (replace_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToExitFullScreenWithDuration:))) {
+                    NSLog(@"Added existing method window:startCustomAnimationToExitFullScreenWithDuration:!");
+                }
+            } else {
+                // The host provides its own customWindowsToEnterFullScreenForWindow and/or customWindowsToExitFullScreenForWindow
+                // Rather than replacing its startCustomAnimationTo{Enter,Exit}FullScreenWithDuration method(s), we proxy it/them.
+                if (!exchange_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToEnterFullScreenWithDuration:),
+                                                [NSObject class], @selector(window:startCustomAnimationToEnterFullScreenIgnoringDuration:))) {
+                    NSLog(@"Failed to swizzle window:startCustomAnimationToEnterFullScreenIgnoringDuration: for window:startCustomAnimationToEnterFullScreenWithDuration:!");
+                }
+                if (!exchange_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToExitFullScreenWithDuration:),
+                                                [NSObject class], @selector(window:startCustomAnimationToExitFullScreenIgnoringDuration:))) {
+                    NSLog(@"Failed to swizzle window:startCustomAnimationToExitFullScreenIgnoringDuration: for window:startCustomAnimationToExitFullScreenWithDuration:!");
+                }
             }
             ego->m_delegateSwizzled = YES;
         }
@@ -633,7 +689,10 @@ static IMP replace_NSWinDelegateSelector(NSObject *destInstance, SEL newSelector
                         // last attempt, a hail-mary: the Dock menu.
                         NSApplication *theApp = [NSApplication sharedApplication];
                         NSObject<NSApplicationDelegate> *delegate = theApp.delegate;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wundeclared-selector"
                         targetMenu = [delegate respondsToSelector:@selector(applicationDockMenu)] ? [delegate applicationDockMenu:theApp] : nil;
+#pragma GCC diagnostic pop
                         // this may work but the item might not survive...
                         if (targetMenu) {
                             NSLog(@"Warning: adding \"Enter Full Screen\" menu to the dockMenu! %@", targetMenu);
