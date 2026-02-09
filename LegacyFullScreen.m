@@ -221,7 +221,7 @@ static IMP replace_NSWinDelegateSelector(NSObject *destInstance, SEL theSelector
                 method_getImplementation(newMethod), method_getTypeEncoding(newMethod));
 }
 
-static BOOL exchange_NSWinDelegateSelector(NSObject *destInstance, SEL oldSelector, Class newClass, SEL newSelector)
+static BOOL exchange_ClassSelector(NSObject *destInstance, SEL oldSelector, Class newClass, SEL newSelector)
 {
     Class class = [destInstance class];
     Method old = class_getInstanceMethod(class, oldSelector);
@@ -256,7 +256,8 @@ static BOOL exchange_NSWinDelegateSelector(NSObject *destInstance, SEL oldSelect
 
 //     NSString *winKey = [NSString stringWithFormat:@"%p", self];
 //     if (!(ego = [aNSW_Instances valueForKey:winKey]))
-    if (!(ego = objc_getAssociatedObject(self, (__bridge const void *)(self))))
+    const void *winkey = (__bridge const void *)(self);
+    if (!(ego = objc_getAssociatedObject(self, winkey)))
     {
         // ego = calloc(1, sizeof(altNSWindow_stateVars));
         ego = [[altNSWindow_stateVars alloc] init];
@@ -284,7 +285,7 @@ static BOOL exchange_NSWinDelegateSelector(NSObject *destInstance, SEL oldSelect
                 isMozilla = YES;
             }
 //             [aNSW_Instances setValue:ego forKey:winKey];
-            objc_setAssociatedObject(self, (__bridge const void *)(self), ego, OBJC_ASSOCIATION_RETAIN);
+            objc_setAssociatedObject(self, winkey, ego, OBJC_ASSOCIATION_RETAIN);
         } else {
             NSLog(@"Warning: failed to allocate state variables; calling the original toggleFullScreen method!");
             _orig(void);
@@ -309,7 +310,16 @@ static BOOL exchange_NSWinDelegateSelector(NSObject *destInstance, SEL oldSelect
             // We only need to add or replace the following 4 methods. You'd think that
             // we should be able to leave customWindowsTo?ForWindow methods, but it turns
             // out that our 2 animation methods really expect the window they work on to
-            // be *this* window (self). (So, we replace them too. Or not... TODO)
+            // be *this* window (self).
+            // So, two scenarios:
+            // 1) the application has a window delegate that does not provide custom animations. We
+            //    can add our own from altNSWindowDelegate.
+            // 2) the application's window delegate provides custom animations. In that case adding
+            //    one or both of the customWindowsTo?FullScreenForWindow will fail (because they exist).
+            //    We leave them in place, and just swizzle the startCustomAnimation methods with those
+            //    from (the NSObject category) alt2NSWindowDelegate. The replacement methods are just
+            //    proxies that call the original methods, but with a negligibly short duration to make
+            //    the application's own custom animation almost instantaneous.
             if (add_NSWinDelegateSelector(wDelegate, @selector(customWindowsToEnterFullScreenForWindow:))
                     && add_NSWinDelegateSelector(wDelegate, @selector(customWindowsToExitFullScreenForWindow:))) {
                 // Existing implementations of the actual animation methods need to be replaced if
@@ -318,16 +328,16 @@ static BOOL exchange_NSWinDelegateSelector(NSObject *destInstance, SEL oldSelect
                     NSLog(@"Added method window:startCustomAnimationToEnterFullScreenWithDuration:!");
                 }
                 if (replace_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToExitFullScreenWithDuration:))) {
-                    NSLog(@"Added existing method window:startCustomAnimationToExitFullScreenWithDuration:!");
+                    NSLog(@"Added method window:startCustomAnimationToExitFullScreenWithDuration:!");
                 }
             } else {
                 // The host provides its own customWindowsToEnterFullScreenForWindow and/or customWindowsToExitFullScreenForWindow
                 // Rather than replacing its startCustomAnimationTo{Enter,Exit}FullScreenWithDuration method(s), we proxy it/them.
-                if (!exchange_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToEnterFullScreenWithDuration:),
+                if (!exchange_ClassSelector(wDelegate, @selector(window:startCustomAnimationToEnterFullScreenWithDuration:),
                                                 [NSObject class], @selector(window:startCustomAnimationToEnterFullScreenIgnoringDuration:))) {
                     NSLog(@"Failed to swizzle window:startCustomAnimationToEnterFullScreenIgnoringDuration: for window:startCustomAnimationToEnterFullScreenWithDuration:!");
                 }
-                if (!exchange_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToExitFullScreenWithDuration:),
+                if (!exchange_ClassSelector(wDelegate, @selector(window:startCustomAnimationToExitFullScreenWithDuration:),
                                                 [NSObject class], @selector(window:startCustomAnimationToExitFullScreenIgnoringDuration:))) {
                     NSLog(@"Failed to swizzle window:startCustomAnimationToExitFullScreenIgnoringDuration: for window:startCustomAnimationToExitFullScreenWithDuration:!");
                 }
