@@ -39,6 +39,8 @@ static NSString *getApplicationName()
     return appName;
 }
 
+#define WINKEY(window) (__bridge const void *)(window)
+
 @interface altNSWindow_stateVars : NSObject
 {
     @public NSApplicationPresentationOptions m_normalPresOpts;
@@ -73,6 +75,7 @@ static NSString *getApplicationName()
 
 static altNSApplicationDelegate *fsDelegate = nil;
 static BOOL fastOnly = NO;
+static NSMutableDictionary *swizzledWinDelegates = nil;
 
 // From Firefox's nsChildView.h :
 @interface NSView (Undocumented)
@@ -178,13 +181,20 @@ static const NSTimeInterval shortDuration = 0.001;
     // instead of startCustomAnimationToEnterFullScreenWithDuration: , startCustomAnimationToEnterFullScreenWithDuration:
     // will get called instead of startCustomAnimationToEnterFullScreenIgnoringDuration: . Follow? :)
     [self window:window startCustomAnimationToEnterFullScreenIgnoringDuration:shortDuration];
+    altNSWindow_stateVars *ego;
+    if ((ego = objc_getAssociatedObject(window, WINKEY(window)))) {
+        // the animation duration we request is so short that we can pretend it's finished by now
+        ego->m_fullScreenActivated = YES;
+    }
 }
 
 - (void)window:(NSWindow *)window startCustomAnimationToExitFullScreenIgnoringDuration:(NSTimeInterval)duration
 {
-    {
-//        NSLog(@"Starting custom exit FS animation with duration %g instead of %g", shortDuration, duration );
-        [self window:window startCustomAnimationToExitFullScreenIgnoringDuration:shortDuration];
+//    NSLog(@"Starting custom exit FS animation with duration %g instead of %g", shortDuration, duration );
+    [self window:window startCustomAnimationToExitFullScreenIgnoringDuration:shortDuration];
+    altNSWindow_stateVars *ego;
+    if ((ego = objc_getAssociatedObject(window, WINKEY(window)))) {
+        ego->m_fullScreenActivated = NO;
     }
 }
 @end
@@ -240,6 +250,73 @@ static BOOL exchange_ClassSelector(NSObject *destInstance, SEL oldSelector, Clas
     return NO;
 }
 
+- (BOOL)swizzleDelegateInstance:(NSObject*)wDelegate
+{
+    if ([wDelegate class] == [altNSWindowDelegate class]) {
+        NSLog(@"WE SHOULDN'T be attempting to swizzle our own class %@!", [wDelegate className]);
+        return NO;
+    }
+    NSString *dlgClassName = [wDelegate className];
+    // m_delegateSwizzled is just for cheap checking if we've already done the work.
+    // Most applications will probably just have a single window class/type, and thus
+    // use a single window delegate class. But we can't rely on that, and we shouldn't
+    // swizzle the same delegate class more than once. So we need to check if we've
+    // already swizzled *this* delegate class (or else the FS animation returns to
+    // stock when a 2nd window is made FS, then back to ours on the 3rd window, etc).
+    if (![swizzledWinDelegates valueForKey:dlgClassName]) {
+        BOOL ok = NO;
+        NSString *okMsg = nil;
+        // here, we need to be discriminate, more than ZKSwizzle would allow to be.
+        // We only need to add or replace the following 4 methods. You'd think that
+        // we should be able to leave customWindowsTo?ForWindow methods, but it turns
+        // out that our 2 animation methods really expect the window they work on to
+        // be *this* window (self).
+        // So, two scenarios:
+        // 1) the application has a window delegate that does not provide custom animations. We
+        //    can add our own from altNSWindowDelegate.
+        // 2) the application's window delegate provides custom animations. In that case adding
+        //    one or both of the customWindowsTo?FullScreenForWindow will fail (because they exist).
+        //    We leave them in place, and just swizzle the startCustomAnimation methods with those
+        //    from (the NSObject category) alt2NSWindowDelegate. The replacement methods are just
+        //    proxies that call the original methods, but with a negligibly short duration to make
+        //    the application's own custom animation almost instantaneous.
+        if (add_NSWinDelegateSelector(wDelegate, @selector(customWindowsToEnterFullScreenForWindow:))
+                && add_NSWinDelegateSelector(wDelegate, @selector(customWindowsToExitFullScreenForWindow:))) {
+            // It is unlikely that there are existing implementations of the actual animation methods
+            // (they wouldn't be called) but if they do exist we still want to replace them.
+            okMsg = @"Adding instantaneous, noop window:startCustomAnimationTo{Enter,Exit}FullScreenWithDuration: methods";
+            if (replace_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToEnterFullScreenWithDuration:))) {
+                NSLog(@"Replaced method window:startCustomAnimationToEnterFullScreenWithDuration:");
+            }
+            if (replace_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToExitFullScreenWithDuration:))) {
+                NSLog(@"Replaced method window:startCustomAnimationToExitFullScreenWithDuration:");
+            }
+            ok = YES;
+     } else {
+            okMsg = @"Proxying window:startCustomAnimationTo{Enter,Exit}FullScreenWithDuration: to ignore the specified duration";
+            // The host provides its own customWindowsToEnterFullScreenForWindow and/or customWindowsToExitFullScreenForWindow
+            // Rather than replacing its startCustomAnimationTo{Enter,Exit}FullScreenWithDuration method(s), we proxy it/them.
+            if (!exchange_ClassSelector(wDelegate, @selector(window:startCustomAnimationToEnterFullScreenWithDuration:),
+                                        [NSObject class], @selector(window:startCustomAnimationToEnterFullScreenIgnoringDuration:))) {
+                NSLog(@"Failed to swizzle window:startCustomAnimationToEnterFullScreenIgnoringDuration: for window:startCustomAnimationToEnterFullScreenWithDuration:!");
+            } else { ok = YES; }
+            if (!exchange_ClassSelector(wDelegate, @selector(window:startCustomAnimationToExitFullScreenWithDuration:),
+                                        [NSObject class], @selector(window:startCustomAnimationToExitFullScreenIgnoringDuration:))) {
+                NSLog(@"Failed to swizzle window:startCustomAnimationToExitFullScreenIgnoringDuration: for window:startCustomAnimationToExitFullScreenWithDuration:!");
+            } else { ok = YES; }
+        }
+        if (ok) {
+            // at least one of the methods we want was swizzled/added
+            [swizzledWinDelegates setValue:[wDelegate class] forKey:dlgClassName];
+            NSLog(@"Delegate class %@: %@", dlgClassName, okMsg);
+        } else {
+            NSLog(@"Failure for delegate class %@: %@", dlgClassName, okMsg);
+        }
+        return ok;
+    }
+    return YES;
+}
+
 - (void)toggleFullScreen:(id)sender
 {
     altNSWindow_stateVars *ego;
@@ -256,7 +333,7 @@ static BOOL exchange_ClassSelector(NSObject *destInstance, SEL oldSelector, Clas
 
 //     NSString *winKey = [NSString stringWithFormat:@"%p", self];
 //     if (!(ego = [aNSW_Instances valueForKey:winKey]))
-    const void *winkey = (__bridge const void *)(self);
+    const void *winkey = WINKEY(self);
     if (!(ego = objc_getAssociatedObject(self, winkey)))
     {
         // ego = calloc(1, sizeof(altNSWindow_stateVars));
@@ -288,7 +365,7 @@ static BOOL exchange_ClassSelector(NSObject *destInstance, SEL oldSelector, Clas
             objc_setAssociatedObject(self, winkey, ego, OBJC_ASSOCIATION_RETAIN);
         } else {
             NSLog(@"Warning: failed to allocate state variables; calling the original toggleFullScreen method!");
-            _orig(void);
+            ZKOrig(void);
             return;
         }
     }
@@ -305,49 +382,8 @@ static BOOL exchange_ClassSelector(NSObject *destInstance, SEL oldSelector, Clas
             }
             [self setDelegate:ego->m_customDelegate];
             NSLog(@"%@ now has delegate %@[%@]", self, wDelegate, [wDelegate className]);
-        } else if (!ego->m_delegateSwizzled) {
-
-            // TODO: keep track of the delegate class(es) we swizzled, not of the windows that have a swizzled delegate!!
-
-            // here, we need to be discriminate, more than ZKSwizzle would allow to be.
-            // We only need to add or replace the following 4 methods. You'd think that
-            // we should be able to leave customWindowsTo?ForWindow methods, but it turns
-            // out that our 2 animation methods really expect the window they work on to
-            // be *this* window (self).
-            // So, two scenarios:
-            // 1) the application has a window delegate that does not provide custom animations. We
-            //    can add our own from altNSWindowDelegate.
-            // 2) the application's window delegate provides custom animations. In that case adding
-            //    one or both of the customWindowsTo?FullScreenForWindow will fail (because they exist).
-            //    We leave them in place, and just swizzle the startCustomAnimation methods with those
-            //    from (the NSObject category) alt2NSWindowDelegate. The replacement methods are just
-            //    proxies that call the original methods, but with a negligibly short duration to make
-            //    the application's own custom animation almost instantaneous.
-            if (add_NSWinDelegateSelector(wDelegate, @selector(customWindowsToEnterFullScreenForWindow:))
-                    && add_NSWinDelegateSelector(wDelegate, @selector(customWindowsToExitFullScreenForWindow:))) {
-                // It is unlikely that there are existing implementations of the actual animation methods
-                // (they wouldn't be called) but if they do exist we still want to replace them.
-                NSLog(@"Adding instantaneous, noop window:startCustomAnimationTo{Enter,Exit}FullScreenWithDuration: methods");
-                if (replace_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToEnterFullScreenWithDuration:))) {
-                    NSLog(@"Replaced method window:startCustomAnimationToEnterFullScreenWithDuration:");
-                }
-                if (replace_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToExitFullScreenWithDuration:))) {
-                    NSLog(@"Replaced method window:startCustomAnimationToExitFullScreenWithDuration:");
-                }
-            } else {
-                NSLog(@"Proxying window:startCustomAnimationTo{Enter,Exit}FullScreenWithDuration: to ignore the specified duration");
-                // The host provides its own customWindowsToEnterFullScreenForWindow and/or customWindowsToExitFullScreenForWindow
-                // Rather than replacing its startCustomAnimationTo{Enter,Exit}FullScreenWithDuration method(s), we proxy it/them.
-                if (!exchange_ClassSelector(wDelegate, @selector(window:startCustomAnimationToEnterFullScreenWithDuration:),
-                                                [NSObject class], @selector(window:startCustomAnimationToEnterFullScreenIgnoringDuration:))) {
-                    NSLog(@"Failed to swizzle window:startCustomAnimationToEnterFullScreenIgnoringDuration: for window:startCustomAnimationToEnterFullScreenWithDuration:!");
-                }
-                if (!exchange_ClassSelector(wDelegate, @selector(window:startCustomAnimationToExitFullScreenWithDuration:),
-                                                [NSObject class], @selector(window:startCustomAnimationToExitFullScreenIgnoringDuration:))) {
-                    NSLog(@"Failed to swizzle window:startCustomAnimationToExitFullScreenIgnoringDuration: for window:startCustomAnimationToExitFullScreenWithDuration:!");
-                }
-            }
-            ego->m_delegateSwizzled = YES;
+        } else if (!ego->m_delegateSwizzled && wDelegate != ego->m_customDelegate) {
+            ego->m_delegateSwizzled = [self swizzleDelegateInstance:wDelegate];
         }
         ZKOrig(void);
         return;
@@ -637,6 +673,7 @@ static BOOL exchange_ClassSelector(NSObject *destInstance, SEL oldSelector, Clas
     }
     if ([userFastNativeList containsObject:appID] || [appFSMode compare:@"FastNative" options:NSCaseInsensitiveSearch] == NSOrderedSame) {
         fastOnly = YES;
+        swizzledWinDelegates = [NSMutableDictionary dictionaryWithCapacity:1];
     }
 
     // Finally, do the same for a whiteList of applications which don't require adding a menu item,

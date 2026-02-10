@@ -4,7 +4,7 @@
 #pragma GCC diagnostic pop
 
 @interface  altNSWindow : NSWindow
-- (void)setStyleMask:(NSUInteger)styleMask;
+//- (void)setStyleMask:(NSUInteger)styleMask;
 - (void)toggleFullScreen:(id)sender;
 @end
 
