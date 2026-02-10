@@ -306,6 +306,9 @@ static BOOL exchange_ClassSelector(NSObject *destInstance, SEL oldSelector, Clas
             [self setDelegate:ego->m_customDelegate];
             NSLog(@"%@ now has delegate %@[%@]", self, wDelegate, [wDelegate className]);
         } else if (!ego->m_delegateSwizzled) {
+
+            // TODO: keep track of the delegate class(es) we swizzled, not of the windows that have a swizzled delegate!!
+
             // here, we need to be discriminate, more than ZKSwizzle would allow to be.
             // We only need to add or replace the following 4 methods. You'd think that
             // we should be able to leave customWindowsTo?ForWindow methods, but it turns
@@ -322,15 +325,17 @@ static BOOL exchange_ClassSelector(NSObject *destInstance, SEL oldSelector, Clas
             //    the application's own custom animation almost instantaneous.
             if (add_NSWinDelegateSelector(wDelegate, @selector(customWindowsToEnterFullScreenForWindow:))
                     && add_NSWinDelegateSelector(wDelegate, @selector(customWindowsToExitFullScreenForWindow:))) {
-                // Existing implementations of the actual animation methods need to be replaced if
-                // we want to drop the entire animation. Or else added.
+                // It is unlikely that there are existing implementations of the actual animation methods
+                // (they wouldn't be called) but if they do exist we still want to replace them.
+                NSLog(@"Adding instantaneous, noop window:startCustomAnimationTo{Enter,Exit}FullScreenWithDuration: methods");
                 if (replace_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToEnterFullScreenWithDuration:))) {
-                    NSLog(@"Added method window:startCustomAnimationToEnterFullScreenWithDuration:!");
+                    NSLog(@"Replaced method window:startCustomAnimationToEnterFullScreenWithDuration:");
                 }
                 if (replace_NSWinDelegateSelector(wDelegate, @selector(window:startCustomAnimationToExitFullScreenWithDuration:))) {
-                    NSLog(@"Added method window:startCustomAnimationToExitFullScreenWithDuration:!");
+                    NSLog(@"Replaced method window:startCustomAnimationToExitFullScreenWithDuration:");
                 }
             } else {
+                NSLog(@"Proxying window:startCustomAnimationTo{Enter,Exit}FullScreenWithDuration: to ignore the specified duration");
                 // The host provides its own customWindowsToEnterFullScreenForWindow and/or customWindowsToExitFullScreenForWindow
                 // Rather than replacing its startCustomAnimationTo{Enter,Exit}FullScreenWithDuration method(s), we proxy it/them.
                 if (!exchange_ClassSelector(wDelegate, @selector(window:startCustomAnimationToEnterFullScreenWithDuration:),
